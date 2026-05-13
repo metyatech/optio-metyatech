@@ -870,7 +870,7 @@ export async function execTaskInRepoPod(
   taskId: string,
   agentCommand: string[],
   env: Record<string, string>,
-  opts?: { resetWorktree?: boolean },
+  opts?: { resetWorktree?: boolean; taskRepos?: any[] },
 ): Promise<ExecSession> {
   return withSpan(
     "k8s.pod.exec",
@@ -911,56 +911,66 @@ export async function execTaskInRepoPod(
       const envB64 = Buffer.from(envJson).toString("base64");
       const runToken = randomUUID();
 
-      // Build worktree setup commands based on whether we're resetting or creating fresh
-      const worktreeSetup = opts?.resetWorktree
-        ? [
-            `if [ -d "/workspace/tasks/${taskId}" ]; then`,
-            `  echo "[optio] Resetting existing worktree for retry..."`,
-            `  cd /workspace/tasks/${taskId}`,
-            `  git checkout -- . 2>/dev/null || true`,
-            `  git clean -fd 2>/dev/null || true`,
-            `  cd /workspace/repo`,
-            `  echo "[optio] Worktree reset complete"`,
-            `else`,
-            `  echo "[optio] No existing worktree found, creating fresh..."`,
-            `  git branch -D optio/task-${taskId} 2>/dev/null || true`,
-            `  if ! git worktree add /workspace/tasks/${taskId} -b optio/task-${taskId} "origin/${env.OPTIO_REPO_BRANCH ?? "main"}" 2>/dev/null; then`,
-            `    echo "[optio] Cleaning up stale worktree references..."`,
-            `    git worktree remove --force /workspace/tasks/${taskId}-wt 2>/dev/null || true`,
-            `    for wt_path in $(git worktree list --porcelain | grep -B1 "branch refs/heads/optio/task-${taskId}$" | grep "^worktree " | cut -d" " -f2-); do`,
-            `      git worktree remove --force "$wt_path" 2>/dev/null || true`,
-            `    done`,
-            `    git worktree prune`,
-            `    git branch -D optio/task-${taskId} 2>/dev/null || true`,
-            `    git worktree add /workspace/tasks/${taskId} -b optio/task-${taskId} "origin/${env.OPTIO_REPO_BRANCH ?? "main"}"`,
-            `  fi`,
-            `fi`,
-          ]
-        : [
-            `git worktree remove --force /workspace/tasks/${taskId} 2>/dev/null || true`,
-            `rm -rf /workspace/tasks/${taskId}`,
-            `if [ "\${OPTIO_RESTART_FROM_BRANCH:-}" = "true" ] && git rev-parse --verify origin/optio/task-${taskId} >/dev/null 2>&1; then`,
-            `  echo "[optio] Force-restart: checking out existing PR branch"`,
-            `  for wt_path in $(git worktree list --porcelain | grep -B1 "branch refs/heads/optio/task-${taskId}$" | grep "^worktree " | cut -d" " -f2-); do`,
-            `    git worktree remove --force "$wt_path" 2>/dev/null || true`,
-            `  done`,
-            `  git worktree prune`,
-            `  git branch -D optio/task-${taskId} 2>/dev/null || true`,
-            `  git worktree add /workspace/tasks/${taskId} -b optio/task-${taskId} origin/optio/task-${taskId}`,
-            `else`,
-            `  git branch -D optio/task-${taskId} 2>/dev/null || true`,
-            `  if ! git worktree add /workspace/tasks/${taskId} -b optio/task-${taskId} "origin/${env.OPTIO_REPO_BRANCH ?? "main"}" 2>/dev/null; then`,
-            `    echo "[optio] Cleaning up stale worktree references..."`,
-            `    git worktree remove --force /workspace/tasks/${taskId}-wt 2>/dev/null || true`,
-            `    for wt_path in $(git worktree list --porcelain | grep -B1 "branch refs/heads/optio/task-${taskId}$" | grep "^worktree " | cut -d" " -f2-); do`,
-            `      git worktree remove --force "$wt_path" 2>/dev/null || true`,
-            `    done`,
-            `    git worktree prune`,
-            `    git branch -D optio/task-${taskId} 2>/dev/null || true`,
-            `    git worktree add /workspace/tasks/${taskId} -b optio/task-${taskId} "origin/${env.OPTIO_REPO_BRANCH ?? "main"}"`,
-            `  fi`,
-            `fi`,
-          ];
+      const taskRepos = opts?.taskRepos ?? [];
+      const repoList =
+        taskRepos.length > 0
+          ? taskRepos
+          : [
+              {
+                workspacePath: "repo",
+                repoUrl: env.OPTIO_REPO_URL,
+                repoBranch: env.OPTIO_REPO_BRANCH ?? "main",
+              },
+            ];
+
+      const workspaceSetup: string[] = [
+        `echo "[optio] Materializing task workspaces..."`,
+        `if [ -d "/workspace/tasks/${taskId}" ]; then`,
+        `  echo "[optio] Cleaning up existing task directory..."`,
+        `  rm -rf "/workspace/tasks/${taskId}"`,
+        `fi`,
+        `mkdir -p "/workspace/tasks/${taskId}"`,
+      ];
+
+      for (const tr of repoList) {
+        const wp = tr.workspacePath || "repo";
+        const taskWsPath = `/workspace/tasks/${taskId}/${wp}`;
+        const cachePath = `/workspace/repo-cache/${wp}`;
+
+        workspaceSetup.push(
+          `if [ -d "${cachePath}" ]; then`,
+          `  cd "${cachePath}"`,
+          `  git fetch origin 2>/dev/null || true`,
+          `  git checkout "${tr.repoBranch || "main"}" 2>/dev/null || true`,
+          `  git reset --hard "origin/${tr.repoBranch || "main"}" 2>/dev/null || true`,
+          `else`,
+          `  echo "[optio] Cache not found for ${wp}, cloning into ${cachePath}..."`,
+          `  git clone --branch "${tr.repoBranch || "main"}" --recurse-submodules "${tr.repoUrl}" "${cachePath}" 2>&1`,
+          `  cd "${cachePath}"`,
+          `  git lfs fetch --all 2>/dev/null || true`,
+          `fi`,
+          `cd /workspace`,
+        );
+
+        workspaceSetup.push(
+          `echo "[optio] Copying from cache ${cachePath} to ${taskWsPath}..."`,
+          `cp -a "${cachePath}" "${taskWsPath}"`,
+          `cd "${taskWsPath}"`,
+          `if [ "\${OPTIO_RESTART_FROM_BRANCH:-}" = "true" ]; then`,
+          `  git fetch origin "optio/task-${taskId}" 2>/dev/null || true`,
+          `  if git rev-parse --verify "FETCH_HEAD" >/dev/null 2>&1; then`,
+          `    echo "[optio] Force-restart: checking out existing PR branch in ${wp}"`,
+          `    git checkout -B "optio/task-${taskId}" FETCH_HEAD`,
+          `  else`,
+          `    git checkout -B "optio/task-${taskId}"`,
+          `  fi`,
+          `else`,
+          `  git checkout -B "optio/task-${taskId}"`,
+          `fi`,
+          `if [ -f "${cachePath}/.gitmodules" ]; then git submodule update --init --recursive 2>&1 || true; fi`,
+          `cd /workspace`,
+        );
+      }
 
       const script = [
         "set -e",
@@ -1006,22 +1016,42 @@ export async function execTaskInRepoPod(
         `exec 9>/workspace/.repo-lock`,
         `flock 9`,
         `echo "[optio] Repo lock acquired"`,
-        `cd /workspace/repo`,
-        `git fetch origin`,
-        `git checkout "${env.OPTIO_REPO_BRANCH ?? "main"}" 2>/dev/null || true`,
-        `git reset --hard "origin/${env.OPTIO_REPO_BRANCH ?? "main"}"`,
-        ...worktreeSetup,
-        `if [ -f /workspace/repo/.gitmodules ]; then git -C /workspace/tasks/${taskId} submodule update --init --recursive 2>&1 || true; fi`,
+        ...workspaceSetup,
         `flock -u 9`,
         `exec 9>&-`,
         `cd /workspace/tasks/${taskId}`,
-        // Configure git at worktree scope so concurrent tasks don't interfere
-        `if [ -n "\${OPTIO_GIT_CREDENTIAL_URL:-}" ] && [ -f /usr/local/bin/optio-git-credential ]; then`,
-        `  git config --local credential.helper '/usr/local/bin/optio-git-credential'`,
-        `  echo "[optio] Worktree credential helper configured"`,
+        // Configure git at workspace scope so concurrent tasks don't interfere
+        // (We apply this config to all repos in the task)
+        `for d in ./*/; do`,
+        `  if [ -d "$d/.git" ]; then`,
+        `    cd "$d"`,
+        `    if [ -n "\${OPTIO_GIT_CREDENTIAL_URL:-}" ] && [ -f /usr/local/bin/optio-git-credential ]; then`,
+        `      git config --local credential.helper '/usr/local/bin/optio-git-credential'`,
+        `      echo "[optio] Workspace credential helper configured for $(basename "$d")"`,
+        `    fi`,
+        `    git config --local user.name "\${GITHUB_APP_BOT_NAME:-Optio Agent}"`,
+        `    git config --local user.email "\${GITHUB_APP_BOT_EMAIL:-optio-agent@noreply.github.com}"`,
+        `    EXCLUDE_FILE="$(git rev-parse --git-dir)/info/exclude"`,
+        `    mkdir -p "$(dirname "$EXCLUDE_FILE")"`,
+        `    grep -qxF '.optio/' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio/' >> "$EXCLUDE_FILE"`,
+        `    grep -qxF '.optio-run-token' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio-run-token' >> "$EXCLUDE_FILE"`,
+        `    grep -qxF '.optio-cache/' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio-cache/' >> "$EXCLUDE_FILE"`,
+        `    cd ..`,
+        `  fi`,
+        `done`,
+        // Also run configuration at the root level if the primary repo was cloned directly into the task directory
+        `if [ -d .git ]; then`,
+        `  if [ -n "\${OPTIO_GIT_CREDENTIAL_URL:-}" ] && [ -f /usr/local/bin/optio-git-credential ]; then`,
+        `    git config --local credential.helper '/usr/local/bin/optio-git-credential'`,
+        `  fi`,
+        `  git config --local user.name "\${GITHUB_APP_BOT_NAME:-Optio Agent}"`,
+        `  git config --local user.email "\${GITHUB_APP_BOT_EMAIL:-optio-agent@noreply.github.com}"`,
+        `  EXCLUDE_FILE="$(git rev-parse --git-dir)/info/exclude"`,
+        `  mkdir -p "$(dirname "$EXCLUDE_FILE")"`,
+        `  grep -qxF '.optio/' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio/' >> "$EXCLUDE_FILE"`,
+        `  grep -qxF '.optio-run-token' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio-run-token' >> "$EXCLUDE_FILE"`,
+        `  grep -qxF '.optio-cache/' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio-cache/' >> "$EXCLUDE_FILE"`,
         `fi`,
-        `git config --local user.name "\${GITHUB_APP_BOT_NAME:-Optio Agent}"`,
-        `git config --local user.email "\${GITHUB_APP_BOT_EMAIL:-optio-agent@noreply.github.com}"`,
         `echo "${runToken}" > /workspace/tasks/${taskId}/.optio-run-token`,
         `export OPTIO_TASK_ID="${taskId}"`,
         `if [ -n "\${OPTIO_SETUP_FILES:-}" ]; then`,
@@ -1045,18 +1075,10 @@ export async function execTaskInRepoPod(
         `    print(f'  wrote {p}')`,
         `"`,
         `fi`,
-        // Exclude Optio runtime files from git tracking using the local exclude file
-        // (never committed, unlike .gitignore modifications)
-        `EXCLUDE_FILE="$(git rev-parse --git-dir)/info/exclude"`,
-        `mkdir -p "$(dirname "$EXCLUDE_FILE")"`,
-        `grep -qxF '.optio/' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio/' >> "$EXCLUDE_FILE"`,
-        `grep -qxF '.optio-run-token' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio-run-token' >> "$EXCLUDE_FILE"`,
-        `grep -qxF '.optio-cache/' "$EXCLUDE_FILE" 2>/dev/null || echo '.optio-cache/' >> "$EXCLUDE_FILE"`,
-        // EXIT trap: kill child processes (agent + watchdog) then clean up internal worktrees.
-        // This ensures orphaned agent processes are killed when the exec stream is severed
-        // (e.g. API pod restart closes the SPDY connection but kubelet doesn't send SIGHUP).
+        // EXIT trap: kill child processes (agent + watchdog)
+        // (Removed git worktree prune since we don't use worktrees anymore)
         `_optio_main_pid=$$`,
-        `trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; cd /workspace/repo 2>/dev/null; git worktree remove --force /workspace/tasks/${taskId}-wt 2>/dev/null || true; git worktree prune 2>/dev/null || true' EXIT`,
+        `trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null' EXIT`,
         // Background heartbeat: detect broken stdout pipe (EPIPE) from severed exec stream.
         // Writes an empty line every 30s (skipped by the NDJSON parser). If stdout is broken
         // (API pod died), sends SIGTERM to the main script which triggers the EXIT trap.
