@@ -50,7 +50,9 @@ describe("readInstalledSkillFiles", () => {
     const files = await readInstalledSkillFiles(sha, ".");
     const byPath = Object.fromEntries(files.map((f) => [f.relativePath, f]));
     expect(Object.keys(byPath).sort()).toEqual(["SKILL.md", "reference.md", "scripts/helper.sh"]);
-    expect(byPath["scripts/helper.sh"].executable).toBe(true);
+    if (process.platform !== "win32") {
+      expect(byPath["scripts/helper.sh"].executable).toBe(true);
+    }
     expect(byPath["SKILL.md"].executable).toBe(false);
     expect(byPath["SKILL.md"].content.toString("utf8")).toMatch(/^---/);
   });

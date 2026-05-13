@@ -32,6 +32,12 @@ vi.mock("../db/schema.js", () => ({
   taskLogs: { taskId: "taskId", timestamp: "timestamp", logType: "logType", content: "content" },
   users: { id: "id", displayName: "display_name", avatarUrl: "avatar_url" },
   repos: { repoUrl: "repoUrl" },
+  taskRepos: {
+    id: "id",
+    taskId: "taskId",
+    repoUrl: "repoUrl",
+    repoBranch: "repoBranch",
+  },
 }));
 
 vi.mock("./event-bus.js", () => ({ publishEvent: vi.fn() }));
@@ -165,6 +171,7 @@ describe("updateTaskPr", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("extracts PR number from URL", async () => {
+    vi.mocked(db.select().from(undefined as any).where).mockResolvedValueOnce([]);
     vi.mocked(db.update(undefined as any).set(undefined as any).where as any).mockResolvedValueOnce(
       [],
     );
@@ -175,6 +182,7 @@ describe("updateTaskPr", () => {
   });
 
   it("handles URL without PR number", async () => {
+    vi.mocked(db.select().from(undefined as any).where).mockResolvedValueOnce([]);
     vi.mocked(db.update(undefined as any).set(undefined as any).where as any).mockResolvedValueOnce(
       [],
     );
