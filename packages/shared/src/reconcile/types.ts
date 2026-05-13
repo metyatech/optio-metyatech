@@ -245,11 +245,29 @@ export type WorldReadError = {
   message: string;
 };
 
+export interface RepoStatus {
+  id: string;
+  repoUrl: string;
+  repoBranch: string;
+  prUrl: string | null;
+  prNumber: number | null;
+  prState: "open" | "merged" | "closed" | null;
+  prChecksStatus: "pending" | "passing" | "failing" | "none" | "conflicts" | null;
+  prReviewStatus: "approved" | "changes_requested" | "pending" | "none" | null;
+  ciStatus: string | null;
+  mergeStatus: "pending" | "merging" | "merged" | "failed" | "skipped" | null;
+  mergeOrder: number | null;
+  mergeError: string | null;
+  worktreeState: string | null;
+  podId: string | null;
+}
+
 export interface WorldSnapshot {
   now: Date;
   run: Run;
   pod: PodStatus | null;
   pr: PrStatus | null;
+  taskRepos: RepoStatus[];
   dependencies: DependencyObservation[];
   blockingSubtasks: DependencyObservation[];
   capacity: {

@@ -154,6 +154,35 @@ export const tasks = pgTable(
   ],
 );
 
+export const taskRepos = pgTable(
+  "task_repos",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    repoUrl: text("repo_url").notNull(),
+    repoBranch: text("repo_branch").notNull().default("main"),
+    prUrl: text("pr_url"),
+    prNumber: integer("pr_number"),
+    prState: text("pr_state"),
+    prChecksStatus: text("pr_checks_status"),
+    prReviewStatus: text("pr_review_status"),
+    ciStatus: text("ci_status"),
+    mergeStatus: text("merge_status"), // "pending" | "merging" | "merged" | "failed" | "skipped"
+    mergeOrder: integer("merge_order"), // 1-based position in the queue
+    mergeStartedAt: timestamp("merge_started_at", { withTimezone: true }),
+    mergeCompletedAt: timestamp("merge_completed_at", { withTimezone: true }),
+    mergeError: text("merge_error"),
+    workspacePath: text("workspace_path"),
+    worktreeState: text("worktree_state"),
+    podId: uuid("pod_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("task_repos_task_id_idx").on(table.taskId)],
+);
+
 export const taskEvents = pgTable(
   "task_events",
   {

@@ -103,11 +103,24 @@ const createTaskSchema = z
     agentType: AgentTypeSchema.optional().describe("Agent runtime override"),
     maxRetries: z.number().int().min(0).max(10).optional(),
     // Repo-task / repo-blueprint fields
-    repoUrl: z.string().url().optional().describe("Repository URL (required for repo kinds)"),
+    repoUrl: z.string().url().optional().describe("Repository URL (legacy, mapped to repos array)"),
     repoBranch: z
       .string()
       .regex(/^[a-zA-Z0-9._/-]+$/, "Invalid branch name")
-      .optional(),
+      .optional()
+      .describe("Legacy repo branch"),
+    repos: z
+      .array(
+        z.object({
+          repoUrl: z.string().url(),
+          repoBranch: z
+            .string()
+            .regex(/^[a-zA-Z0-9._/-]+$/, "Invalid branch name")
+            .optional(),
+        }),
+      )
+      .optional()
+      .describe("Array of repositories for this task"),
     priority: z.number().int().min(1).max(1000).optional(),
     // Repo-task-only fields
     ticketSource: z.string().optional(),
@@ -497,18 +510,30 @@ export async function taskRoutes(rawApp: FastifyInstance) {
       }
 
       // ── Default: ad-hoc Repo Task ─────────────────────────────────────
-      if (!input.repoUrl) {
-        return reply.status(400).send({ error: "repo-task requires `repoUrl`" });
+      const reposArray =
+        input.repos && input.repos.length > 0
+          ? input.repos
+          : input.repoUrl
+            ? [{ repoUrl: input.repoUrl, repoBranch: input.repoBranch ?? "main" }]
+            : [];
+
+      if (reposArray.length === 0) {
+        return reply
+          .status(400)
+          .send({ error: "repo-task requires at least one `repoUrl` or `repos` array" });
       }
       if (!input.title) {
         return reply.status(400).send({ error: "repo-task requires `title`" });
       }
       const { dependsOn, type: _t, name: _n, description: _d, enabled: _e, ...taskInput } = input;
 
+      const primaryRepoUrl = reposArray[0].repoUrl;
+      const primaryRepoBranch = reposArray[0].repoBranch ?? "main";
+
       let resolvedAgentType: string = taskInput.agentType ?? "";
       if (!resolvedAgentType) {
         const repoConfig = await import("../services/repo-service.js").then((m) =>
-          m.getRepoByUrl(taskInput.repoUrl!, req.user?.workspaceId ?? null),
+          m.getRepoByUrl(primaryRepoUrl, req.user?.workspaceId ?? null),
         );
         resolvedAgentType = repoConfig?.defaultAgentType ?? "claude-code";
       }
@@ -516,8 +541,9 @@ export async function taskRoutes(rawApp: FastifyInstance) {
       const task = await taskService.createTask({
         title: taskInput.title!,
         prompt: taskInput.prompt,
-        repoUrl: taskInput.repoUrl!,
-        repoBranch: taskInput.repoBranch,
+        repoUrl: primaryRepoUrl,
+        repoBranch: primaryRepoBranch,
+        repos: reposArray,
         agentType: resolvedAgentType,
         ticketSource: taskInput.ticketSource,
         ticketExternalId: taskInput.ticketExternalId,
@@ -530,7 +556,12 @@ export async function taskRoutes(rawApp: FastifyInstance) {
       logAction({
         userId: req.user?.id,
         action: "task.create",
-        params: { taskId: task.id, title: taskInput.title, repoUrl: taskInput.repoUrl },
+        params: {
+          taskId: task.id,
+          title: taskInput.title,
+          repoUrl: primaryRepoUrl,
+          repos: reposArray,
+        },
         result: { id: task.id },
         success: true,
       }).catch(() => {});

@@ -487,6 +487,14 @@ async function applyAutoMergePr(snapshot: WorldSnapshot): Promise<ExecuteOutcome
   });
   if (casResult === "stale") return { status: "stale", reason: "cas_failed_post_merge" };
 
+  const remainingPrs = (snapshot.taskRepos ?? []).filter(
+    (repo) => repo.prUrl && repo.prUrl !== status.prUrl && repo.prState !== "merged",
+  );
+  if (remainingPrs.length > 0) {
+    await enqueueReconcile({ kind: "repo", id: taskId }, { reason: "auto_merged_next_repo" });
+    return { status: "applied", reason: "auto_merged_one_repo" };
+  }
+
   try {
     await taskService.transitionTask(
       taskId,

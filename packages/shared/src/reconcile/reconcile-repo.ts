@@ -4,6 +4,7 @@ import type {
   WorldSnapshot,
   RepoRunSpec,
   RepoRunStatus,
+  RepoStatus,
   DependencyObservation,
 } from "./types.js";
 
@@ -348,7 +349,7 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
   if (spec.taskType !== "coding") {
     return { kind: "noop", reason: `pr_machinery_disabled_for_${spec.taskType}` };
   }
-  const pr = snapshot.pr;
+  const pr = aggregatePrFromTaskRepos(snapshot.taskRepos, status.prReviewComments) ?? snapshot.pr;
   if (!pr) {
     return { kind: "noop", reason: "pr_info_not_yet_available" };
   }
@@ -389,9 +390,10 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
   }
 
   const canResume = status.state !== TaskState.FAILED;
+  const aggregate = aggregateStatusFromTaskRepos(snapshot.taskRepos);
   const prev = {
-    checks: status.prChecksStatus,
-    review: status.prReviewStatus,
+    checks: aggregate?.prChecksStatus ?? status.prChecksStatus,
+    review: aggregate?.prReviewStatus ?? status.prReviewStatus,
   };
 
   const autoResumeAllowed =
@@ -440,6 +442,7 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
     pr.checksStatus === "passing" &&
     prev.checks !== "passing" &&
     pr.state === "open" &&
+    !snapshot.settings.autoMerge &&
     snapshot.settings.reviewEnabled &&
     snapshot.settings.reviewTrigger === "on_ci_pass" &&
     !snapshot.settings.hasReviewSubtask
@@ -449,8 +452,9 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
 
   // First PR detection → trigger review if configured for on_pr.
   if (
-    prev.checks === null &&
+    (prev.checks === null || prev.checks === "none") &&
     pr.state === "open" &&
+    !snapshot.settings.autoMerge &&
     snapshot.settings.reviewEnabled &&
     snapshot.settings.reviewTrigger === "on_pr" &&
     !snapshot.settings.hasReviewSubtask
@@ -506,6 +510,65 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+function aggregatePrFromTaskRepos(
+  reposForTask: RepoStatus[],
+  latestReviewComments: string | null,
+): NonNullable<WorldSnapshot["pr"]> | null {
+  const aggregate = aggregateStatusFromTaskRepos(reposForTask ?? []);
+  if (!aggregate?.prUrl || !aggregate.prNumber || !aggregate.prState) return null;
+  return {
+    url: aggregate.prUrl,
+    number: aggregate.prNumber,
+    state: aggregate.prState,
+    merged: aggregate.prState === "merged",
+    mergeable: aggregate.prChecksStatus === "conflicts" ? false : null,
+    checksStatus:
+      aggregate.prChecksStatus === "conflicts" ? "failing" : (aggregate.prChecksStatus ?? "none"),
+    reviewStatus: aggregate.prReviewStatus ?? "none",
+    latestReviewComments,
+    headSha: null,
+  };
+}
+
+function aggregateStatusFromTaskRepos(
+  reposForTask: RepoStatus[],
+): Pick<
+  RepoRunStatus,
+  "prUrl" | "prNumber" | "prState" | "prChecksStatus" | "prReviewStatus"
+> | null {
+  const prRepos = (reposForTask ?? []).filter((repo) => repo.prUrl);
+  if (prRepos.length === 0) return null;
+  const primary = prRepos.find((repo) => repo.prState !== "merged") ?? prRepos[0];
+  return {
+    prUrl: primary.prUrl,
+    prNumber: primary.prNumber,
+    prState: prRepos.every((repo) => repo.prState === "merged")
+      ? "merged"
+      : prRepos.some((repo) => repo.prState === "closed")
+        ? "closed"
+        : "open",
+    prChecksStatus: aggregateChecksStatus(prRepos),
+    prReviewStatus: aggregateReviewStatus(prRepos),
+  };
+}
+
+function aggregateChecksStatus(reposForTask: RepoStatus[]): RepoRunStatus["prChecksStatus"] {
+  const statuses = reposForTask.map((repo) => repo.prChecksStatus ?? repo.ciStatus ?? "none");
+  if (statuses.includes("conflicts")) return "conflicts";
+  if (statuses.includes("failing")) return "failing";
+  if (statuses.includes("pending")) return "pending";
+  if (statuses.some((status) => status === "passing")) return "passing";
+  return "none";
+}
+
+function aggregateReviewStatus(reposForTask: RepoStatus[]): RepoRunStatus["prReviewStatus"] {
+  const statuses = reposForTask.map((repo) => repo.prReviewStatus ?? "none");
+  if (statuses.includes("changes_requested")) return "changes_requested";
+  if (statuses.includes("pending")) return "pending";
+  if (statuses.some((status) => status === "approved")) return "approved";
+  return "none";
+}
 
 function blockingSubtasksComplete(subs: DependencyObservation[]): boolean {
   if (subs.length === 0) return true;

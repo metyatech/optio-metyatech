@@ -2,6 +2,7 @@ import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   tasks,
+  taskRepos,
   workflowRuns,
   workflows,
   repoPods,
@@ -38,6 +39,7 @@ import type {
   DependencyObservation,
   RepoRunSpec,
   RepoRunStatus,
+  RepoStatus,
   StandaloneRunSpec,
   StandaloneRunStatus,
   PrReviewRunSpec,
@@ -84,7 +86,7 @@ async function buildRepoSnapshot(ref: RunRef): Promise<WorldSnapshot | null> {
     subtaskCounts,
     globalCap,
     repoCap,
-    prResult,
+    taskReposResult,
     podResult,
     repoConfig,
     recentAutoResumeCount,
@@ -105,16 +107,10 @@ async function buildRepoSnapshot(ref: RunRef): Promise<WorldSnapshot | null> {
       readErrors.push({ source: "capacity", message: String(err) });
       return null;
     }),
-    // Only coding tasks own a PR. "review" subtasks and external "pr_review"
-    // tasks reference PRs through other tables (parent task / review_drafts),
-    // so never load PR status for them — that's what keeps them out of the
-    // PR-reactive state machine (auto-merge, auto-resume, launch-review).
-    row.taskType !== "coding" && row.taskType !== null
-      ? Promise.resolve(null)
-      : loadPrStatus(run, row.createdBy ?? null).catch((err) => {
-          readErrors.push({ source: "pr", message: String(err) });
-          return null;
-        }),
+    loadTaskRepos(ref.id).catch((err) => {
+      readErrors.push({ source: "deps", message: String(err) });
+      return [];
+    }),
     loadPodStatusForRepo(row.lastPodId ?? null).catch((err) => {
       readErrors.push({ source: "pod", message: String(err) });
       return null;
@@ -125,6 +121,10 @@ async function buildRepoSnapshot(ref: RunRef): Promise<WorldSnapshot | null> {
     }),
     countRecentAutoResumes(ref.id).catch(() => 0),
   ]);
+
+  const repoRunStatus = run.status as RepoRunStatus;
+  const aggregatedPr = aggregateTaskRepoPrStatus(taskReposResult, repoRunStatus.prReviewComments);
+  const runWithTaskRepoStatus = applyTaskRepoAggregateToRun(run, taskReposResult);
 
   const stallThresholdMs = parseIntEnv("OPTIO_STALL_THRESHOLD_MS", DEFAULT_STALL_THRESHOLD_MS);
   const heartbeat = computeHeartbeat(
@@ -141,9 +141,10 @@ async function buildRepoSnapshot(ref: RunRef): Promise<WorldSnapshot | null> {
 
   const snapshot: WorldSnapshot = {
     now,
-    run,
+    run: runWithTaskRepoStatus,
     pod: podResult,
-    pr: prResult,
+    pr: aggregatedPr,
+    taskRepos: taskReposResult,
     dependencies: deps,
     blockingSubtasks: subtaskCounts,
     capacity: {
@@ -193,6 +194,126 @@ async function countRecentAutoResumes(taskId: string): Promise<number> {
         )`,
     );
   return Number(count);
+}
+
+function applyTaskRepoAggregateToRun(run: Run, reposForTask: RepoStatus[]): Run {
+  if (run.kind !== "repo") return run;
+  const aggregate = aggregateRepoStatusFields(reposForTask);
+  if (!aggregate) return run;
+  return {
+    ...run,
+    status: {
+      ...run.status,
+      prUrl: aggregate.prUrl,
+      prNumber: aggregate.prNumber,
+      prState: aggregate.prState,
+      prChecksStatus: aggregate.prChecksStatus,
+      prReviewStatus: aggregate.prReviewStatus,
+    },
+  };
+}
+
+function aggregateTaskRepoPrStatus(
+  reposForTask: RepoStatus[],
+  latestReviewComments: string | null,
+): PrStatus | null {
+  const aggregate = aggregateRepoStatusFields(reposForTask);
+  if (!aggregate?.prUrl || !aggregate.prNumber || !aggregate.prState) return null;
+  return {
+    url: aggregate.prUrl,
+    number: aggregate.prNumber,
+    state: aggregate.prState,
+    merged: aggregate.prState === "merged",
+    mergeable: aggregate.prChecksStatus === "conflicts" ? false : null,
+    checksStatus:
+      aggregate.prChecksStatus === "conflicts" ? "failing" : (aggregate.prChecksStatus ?? "none"),
+    reviewStatus: aggregate.prReviewStatus ?? "none",
+    latestReviewComments,
+    headSha: null,
+  };
+}
+
+function aggregateRepoStatusFields(
+  reposForTask: RepoStatus[],
+): Pick<
+  RepoRunStatus,
+  "prUrl" | "prNumber" | "prState" | "prChecksStatus" | "prReviewStatus"
+> | null {
+  const prRepos = reposForTask.filter((repo) => repo.prUrl);
+  if (prRepos.length === 0) return null;
+  const primary = prRepos.find((repo) => repo.prState !== "merged") ?? prRepos[0];
+  const prState = prRepos.every((repo) => repo.prState === "merged")
+    ? "merged"
+    : prRepos.some((repo) => repo.prState === "closed")
+      ? "closed"
+      : "open";
+  return {
+    prUrl: primary.prUrl,
+    prNumber: primary.prNumber,
+    prState,
+    prChecksStatus: aggregateChecksStatus(prRepos),
+    prReviewStatus: aggregateReviewStatus(prRepos),
+  };
+}
+
+function aggregateChecksStatus(reposForTask: RepoStatus[]): RepoRunStatus["prChecksStatus"] {
+  const statuses = reposForTask.map((repo) => repo.prChecksStatus ?? repo.ciStatus ?? "none");
+  if (statuses.includes("conflicts")) return "conflicts";
+  if (statuses.includes("failing")) return "failing";
+  if (statuses.includes("pending")) return "pending";
+  if (statuses.some((status) => status === "passing")) return "passing";
+  return "none";
+}
+
+function aggregateReviewStatus(reposForTask: RepoStatus[]): RepoRunStatus["prReviewStatus"] {
+  const statuses = reposForTask.map((repo) => repo.prReviewStatus ?? "none");
+  if (statuses.includes("changes_requested")) return "changes_requested";
+  if (statuses.includes("pending")) return "pending";
+  if (statuses.some((status) => status === "approved")) return "approved";
+  return "none";
+}
+
+async function loadTaskRepos(taskId: string): Promise<RepoStatus[]> {
+  const rows = await db.select().from(taskRepos).where(eq(taskRepos.taskId, taskId));
+  return rows.map((row) => ({
+    id: row.id,
+    repoUrl: row.repoUrl,
+    repoBranch: row.repoBranch,
+    prUrl: row.prUrl ?? null,
+    prNumber: row.prNumber ?? null,
+    prState:
+      row.prState === "open" || row.prState === "merged" || row.prState === "closed"
+        ? row.prState
+        : null,
+    prChecksStatus:
+      row.prChecksStatus === "pending" ||
+      row.prChecksStatus === "passing" ||
+      row.prChecksStatus === "failing" ||
+      row.prChecksStatus === "none" ||
+      row.prChecksStatus === "conflicts"
+        ? row.prChecksStatus
+        : null,
+    prReviewStatus:
+      row.prReviewStatus === "approved" ||
+      row.prReviewStatus === "changes_requested" ||
+      row.prReviewStatus === "pending" ||
+      row.prReviewStatus === "none"
+        ? row.prReviewStatus
+        : null,
+    ciStatus: row.ciStatus ?? null,
+    mergeStatus:
+      row.mergeStatus === "pending" ||
+      row.mergeStatus === "merging" ||
+      row.mergeStatus === "merged" ||
+      row.mergeStatus === "failed" ||
+      row.mergeStatus === "skipped"
+        ? row.mergeStatus
+        : null,
+    mergeOrder: row.mergeOrder ?? null,
+    mergeError: row.mergeError ?? null,
+    worktreeState: row.worktreeState ?? null,
+    podId: row.podId ?? null,
+  }));
 }
 
 function loadRepoRun(row: typeof tasks.$inferSelect, ref: RunRef): Run {
@@ -469,6 +590,7 @@ async function buildStandaloneSnapshot(ref: RunRef): Promise<WorldSnapshot | nul
     run,
     pod: podResult,
     pr: null,
+    taskRepos: [],
     dependencies: [],
     blockingSubtasks: [],
     capacity: {
@@ -624,6 +746,7 @@ async function buildPrReviewSnapshot(ref: RunRef): Promise<WorldSnapshot | null>
     run: runWithAuto,
     pod: null,
     pr: prResult,
+    taskRepos: [],
     dependencies: [],
     blockingSubtasks: [],
     capacity: {
@@ -822,6 +945,7 @@ async function buildPersistentAgentSnapshot(ref: RunRef): Promise<WorldSnapshot 
     run,
     pod: podRow,
     pr: null,
+    taskRepos: [],
     dependencies: [],
     blockingSubtasks: [],
     capacity: {

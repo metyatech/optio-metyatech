@@ -1,6 +1,6 @@
 import { eq, desc, and, or, ilike, gte, lte, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { tasks, taskEvents, taskLogs, users, repos } from "../db/schema.js";
+import { tasks, taskRepos, taskEvents, taskLogs, users, repos } from "../db/schema.js";
 import {
   TaskState,
   transition,
@@ -8,6 +8,7 @@ import {
   normalizeRepoUrl,
   DEFAULT_STALL_THRESHOLD_MS,
   parseIntEnv,
+  parsePrUrl,
   type CreateTaskInput,
 } from "@optio/shared";
 import { publishEvent } from "./event-bus.js";
@@ -52,6 +53,22 @@ export async function createTask(input: CreateTaskInput & { workspaceId?: string
       workspaceId: input.workspaceId ?? undefined,
     })
     .returning();
+
+  const reposToInsert =
+    input.repos && input.repos.length > 0
+      ? input.repos.map((r) => ({
+          repoUrl: normalizeRepoUrl(r.repoUrl),
+          repoBranch: r.repoBranch ?? "main",
+        }))
+      : [{ repoUrl: normalizeRepoUrl(input.repoUrl), repoBranch: input.repoBranch ?? "main" }];
+
+  await db.insert(taskRepos).values(
+    reposToInsert.map((r) => ({
+      taskId: task.id,
+      repoUrl: r.repoUrl,
+      repoBranch: r.repoBranch,
+    })),
+  );
 
   await publishEvent({
     type: "task:created",
@@ -435,12 +452,31 @@ export async function updateTaskContainer(id: string, containerId: string) {
 }
 
 export async function updateTaskPr(id: string, prUrl: string) {
-  const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
-  const prNumber = prNumberMatch ? parseInt(prNumberMatch[1], 10) : undefined;
+  const parsed = parsePrUrl(prUrl);
+  const prNumberMatch = prUrl.match(/\/(?:pull|merge_requests)\/(\d+)/);
+  const prNumber = parsed?.prNumber ?? (prNumberMatch ? parseInt(prNumberMatch[1], 10) : undefined);
+  const now = new Date();
   await db
     .update(tasks)
-    .set({ prUrl, ...(prNumber != null && { prNumber }), updatedAt: new Date() })
+    .set({ prUrl, ...(prNumber != null && { prNumber }), updatedAt: now })
     .where(eq(tasks.id, id));
+
+  const repoUrl = parsed
+    ? normalizeRepoUrl(`https://${parsed.host}/${parsed.owner}/${parsed.repo}`)
+    : null;
+  const taskRepoRows = await db.select().from(taskRepos).where(eq(taskRepos.taskId, id));
+  const targetRepo = repoUrl
+    ? taskRepoRows.find((row) => normalizeRepoUrl(row.repoUrl) === repoUrl)
+    : undefined;
+  const targetRepoId =
+    targetRepo?.id ?? (taskRepoRows.length === 1 ? taskRepoRows[0].id : undefined);
+
+  if (targetRepoId) {
+    await db
+      .update(taskRepos)
+      .set({ prUrl, ...(prNumber != null && { prNumber }), prState: "open", updatedAt: now })
+      .where(eq(taskRepos.id, targetRepoId));
+  }
 }
 
 export async function updateTaskSession(id: string, sessionId: string) {

@@ -9,6 +9,7 @@ export interface AgentTaskInput {
   prompt: string;
   repoUrl: string;
   repoBranch: string;
+  repos?: Array<{ repoUrl: string; repoBranch?: string }>;
   additionalContext?: string;
   claudeAuthMode?: ClaudeAuthMode;
   codexAuthMode?: CodexAuthMode;
@@ -41,6 +42,7 @@ export interface AgentTaskInput {
   googleCloudProject?: string;
   googleCloudLocation?: string;
   claudeVertexServiceAccountKey?: string;
+  agentDotfilesProfile?: string;
 }
 
 export interface AgentContainerConfig {

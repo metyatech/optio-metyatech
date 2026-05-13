@@ -111,18 +111,22 @@ fi
 
 # Clone repo (--recurse-submodules handles repos with submodules)
 cd /workspace
-echo "[optio] Cloning..."
-git clone --branch "${OPTIO_REPO_BRANCH}" --recurse-submodules "${OPTIO_REPO_URL}" repo 2>&1
-echo "[optio] Repo cloned"
+echo "[optio] Cloning into repo-cache..."
+mkdir -p /workspace/repo-cache
+git clone --branch "${OPTIO_REPO_BRANCH}" --recurse-submodules "${OPTIO_REPO_URL}" /workspace/repo-cache/repo 2>&1
+cd /workspace/repo-cache/repo
+git lfs fetch --all 2>/dev/null || echo "[optio] Warning: git lfs fetch failed"
+cd /workspace
+echo "[optio] Repo cloned into cache"
 
 # Create tasks directory for worktrees
 mkdir -p /workspace/tasks
 
 # Run repo-level setup if present (.optio/setup.sh)
-if [ -f /workspace/repo/.optio/setup.sh ]; then
+if [ -f /workspace/repo-cache/repo/.optio/setup.sh ]; then
   echo "[optio] Running repo setup script (.optio/setup.sh)..."
-  chmod +x /workspace/repo/.optio/setup.sh
-  cd /workspace/repo && ./.optio/setup.sh
+  chmod +x /workspace/repo-cache/repo/.optio/setup.sh
+  cd /workspace/repo-cache/repo && ./.optio/setup.sh
   echo "[optio] Repo setup complete"
 fi
 
@@ -131,7 +135,7 @@ fi
 # OPTIO_SETUP_COMMANDS is deprecated and will be removed in a future release.
 if [ -n "${OPTIO_SETUP_COMMANDS:-}" ]; then
   echo "[optio] Running setup commands (consider migrating to .optio/setup.sh)..."
-  cd /workspace/repo
+  cd /workspace/repo-cache/repo
   SETUP_SCRIPT="$(mktemp /tmp/optio-setup-XXXXXX.sh)"
   printf '%s\n' "${OPTIO_SETUP_COMMANDS}" > "${SETUP_SCRIPT}"
   chmod 700 "${SETUP_SCRIPT}"

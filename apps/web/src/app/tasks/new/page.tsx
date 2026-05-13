@@ -51,9 +51,7 @@ export default function NewTaskPage() {
     title: "",
     prompt: "",
     description: "",
-    repoId: "",
-    repoUrl: "",
-    repoBranch: "main",
+    selectedRepos: [] as Array<{ id: string; url: string; branch: string }>,
     agentType: "claude-code",
     priority: 100,
     maxRetries: 3,
@@ -77,29 +75,56 @@ export default function NewTaskPage() {
 
   // When switching into repo mode or loading repos, pre-select the first.
   useEffect(() => {
-    if (mode === "repo" && !form.repoId && repos.length > 0) {
+    if (mode === "repo" && form.selectedRepos.length === 0 && repos.length > 0) {
       const first = repos[0];
       setForm((f) => ({
         ...f,
-        repoId: first.id,
-        repoUrl: first.repoUrl,
-        repoBranch: first.defaultBranch ?? "main",
+        selectedRepos: [
+          { id: first.id, url: first.repoUrl, branch: first.defaultBranch ?? "main" },
+        ],
         agentType: first.defaultAgentType ?? f.agentType,
       }));
     }
-  }, [mode, form.repoId, repos]);
+  }, [mode, form.selectedRepos.length, repos]);
 
-  const handleRepoChange = (repoId: string) => {
-    const repo = repos.find((r: any) => r.id === repoId);
-    if (repo) {
+  const addRepo = () => {
+    if (repos.length > 0) {
+      const first = repos[0];
       setForm((f) => ({
         ...f,
-        repoId: repo.id,
-        repoUrl: repo.repoUrl,
-        repoBranch: repo.defaultBranch ?? "main",
-        agentType: repo.defaultAgentType ?? f.agentType,
+        selectedRepos: [
+          ...f.selectedRepos,
+          { id: first.id, url: first.repoUrl, branch: first.defaultBranch ?? "main" },
+        ],
       }));
     }
+  };
+
+  const removeRepo = (index: number) => {
+    setForm((f) => {
+      const newRepos = [...f.selectedRepos];
+      newRepos.splice(index, 1);
+      return { ...f, selectedRepos: newRepos };
+    });
+  };
+
+  const updateSelectedRepo = (index: number, field: string, value: string) => {
+    setForm((f) => {
+      const newRepos = [...f.selectedRepos];
+      if (field === "id") {
+        const repo = repos.find((r: any) => r.id === value);
+        if (repo) {
+          newRepos[index] = {
+            id: repo.id,
+            url: repo.repoUrl,
+            branch: repo.defaultBranch ?? "main",
+          };
+        }
+      } else {
+        newRepos[index] = { ...newRepos[index], [field]: value };
+      }
+      return { ...f, selectedRepos: newRepos };
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -137,8 +162,12 @@ export default function NewTaskPage() {
         description: form.description || undefined,
         agentType: form.agentType,
         maxRetries: form.maxRetries,
-        repoUrl: mode === "repo" ? form.repoUrl : undefined,
-        repoBranch: mode === "repo" ? form.repoBranch : undefined,
+        repos:
+          mode === "repo"
+            ? form.selectedRepos.map((r) => ({ repoUrl: r.url, repoBranch: r.branch }))
+            : undefined,
+        repoUrl: mode === "repo" ? form.selectedRepos[0]?.url : undefined,
+        repoBranch: mode === "repo" ? form.selectedRepos[0]?.branch : undefined,
         priority: mode === "repo" ? form.priority : undefined,
         ...(selectedDeps.length > 0 && apiType === "repo-task" ? { dependsOn: selectedDeps } : {}),
         enabled: true,
@@ -193,7 +222,8 @@ export default function NewTaskPage() {
     }
   };
 
-  const canSubmit = !loading && form.title && form.prompt && (mode !== "repo" || form.repoUrl);
+  const canSubmit =
+    !loading && form.title && form.prompt && (mode !== "repo" || form.selectedRepos.length > 0);
 
   const submitLabel =
     runMode === "schedule"
@@ -382,35 +412,85 @@ export default function NewTaskPage() {
                   <Loader2 className="w-4 h-4 animate-spin" /> Loading repos...
                 </div>
               ) : repos.length > 0 ? (
-                <>
-                  <div>
-                    <label className="block text-sm text-text-muted mb-1.5">Repository</label>
-                    <select
-                      required
-                      value={form.repoId}
-                      onChange={(e) => handleRepoChange(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-colors"
+                <div className="space-y-4">
+                  {form.selectedRepos.map((selectedRepo, index) => (
+                    <div
+                      key={index}
+                      className="p-3 border border-border/50 bg-bg rounded-lg relative"
                     >
-                      {repos.map((repo: any) => (
-                        <option key={repo.id} value={repo.id}>
-                          {repo.fullName} ({repo.defaultBranch})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm text-text-muted mb-1.5">Branch</label>
-                    <div className="flex items-center gap-2">
-                      <GitBranchIcon className="w-3.5 h-3.5 text-text-muted" />
-                      <input
-                        type="text"
-                        value={form.repoBranch}
-                        onChange={(e) => setForm((f) => ({ ...f, repoBranch: e.target.value }))}
-                        className="flex-1 px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-colors"
-                      />
+                      {form.selectedRepos.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeRepo(index)}
+                          className="absolute top-2 right-2 text-text-muted hover:text-red-500 transition-colors"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M18 6 6 18" />
+                            <path d="m6 6 12 12" />
+                          </svg>
+                        </button>
+                      )}
+                      <div className="mb-3 pr-6">
+                        <label className="block text-xs text-text-muted mb-1.5">Repository</label>
+                        <select
+                          required
+                          value={selectedRepo.id}
+                          onChange={(e) => updateSelectedRepo(index, "id", e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg bg-bg-card border border-border text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-colors"
+                        >
+                          {repos.map((repo: any) => (
+                            <option key={repo.id} value={repo.id}>
+                              {repo.fullName} ({repo.defaultBranch})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-text-muted mb-1.5">Branch</label>
+                        <div className="flex items-center gap-2">
+                          <GitBranchIcon className="w-3.5 h-3.5 text-text-muted" />
+                          <input
+                            type="text"
+                            value={selectedRepo.branch}
+                            onChange={(e) => updateSelectedRepo(index, "branch", e.target.value)}
+                            className="flex-1 px-3 py-2 rounded-lg bg-bg-card border border-border text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-colors"
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addRepo}
+                    className="text-sm text-primary hover:underline flex items-center gap-1"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M5 12h14" />
+                      <path d="M12 5v14" />
+                    </svg>
+                    Add another repository
+                  </button>
+                </div>
               ) : (
                 <div className="text-sm text-text-muted py-2">
                   No repos configured.{" "}

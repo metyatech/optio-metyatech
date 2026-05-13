@@ -1,7 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { tasks, sessionPrs, interactiveSessions, prReviews } from "../db/schema.js";
+import { tasks, sessionPrs, interactiveSessions, prReviews, taskRepos } from "../db/schema.js";
 import type { GitPlatform, RepoIdentifier } from "@optio/shared";
 import { parsePrUrl, parseIntEnv } from "@optio/shared";
 import { getGitPlatformForRepo } from "../services/git-token-service.js";
@@ -84,30 +84,29 @@ export function startPrWatcherWorker() {
       }
 
       // --- Task PR watching ---
-      // Find all tasks with open PRs. Watch pr_opened tasks + failed tasks
+      // Find all task repos with open PRs. Watch pr_opened tasks + failed tasks
       // that have a PR (CI may recover, auto-merge may become possible).
       // Only watch coding tasks, NOT review subtasks (avoid recursive reviews).
-      //
-      // The watcher's only job is to refresh the PR fields on the row and
-      // wake the reconciler — every transition / side-effect (auto-merge,
-      // review launch, resume, completion) is decided in reconcile-repo.ts
-      // and applied by reconcile-executor.ts.
-      const openPrTasks = await db
-        .select()
-        .from(tasks)
+      const openPrRepos = await db
+        .select({
+          taskRepo: taskRepos,
+          task: tasks,
+        })
+        .from(taskRepos)
+        .innerJoin(tasks, eq(taskRepos.taskId, tasks.id))
         .where(
-          sql`${tasks.state} IN ('pr_opened', 'failed') AND ${tasks.prUrl} IS NOT NULL AND (${tasks.taskType} = 'coding' OR ${tasks.taskType} IS NULL)`,
+          sql`${tasks.state} IN ('pr_opened', 'failed') AND ${taskRepos.prUrl} IS NOT NULL AND (${tasks.taskType} = 'coding' OR ${tasks.taskType} IS NULL)`,
         );
 
-      for (const task of openPrTasks) {
-        if (!task.prUrl) continue;
+      for (const { taskRepo, task } of openPrRepos) {
+        if (!taskRepo.prUrl) continue;
 
         try {
-          const parsed = parsePrUrl(task.prUrl);
+          const parsed = parsePrUrl(taskRepo.prUrl);
           if (!parsed) continue;
           const { prNumber } = parsed;
 
-          const platformResult = await getCachedPlatform(task.repoUrl, {
+          const platformResult = await getCachedPlatform(taskRepo.repoUrl, {
             userId: task.createdBy ?? undefined,
           });
           if (!platformResult) continue;
@@ -138,10 +137,7 @@ export function startPrWatcherWorker() {
 
           // Conflicts override the raw checks status — once we've recorded
           // conflicts, keep that label until mergeable flips back.
-          const effectiveChecksStatus =
-            task.prChecksStatus === "conflicts" && prData.mergeable === false
-              ? "conflicts"
-              : checksStatus;
+          const effectiveChecksStatus = prData.mergeable === false ? "conflicts" : checksStatus;
 
           // Write all PR fields in one update. The reconciler reads these
           // from the snapshot to decide the next action.
@@ -149,20 +145,38 @@ export function startPrWatcherWorker() {
             prNumber,
             prState: prData.merged ? "merged" : prData.state,
             prChecksStatus: effectiveChecksStatus,
+            ciStatus: checksStatus,
             prReviewStatus: reviewStatus,
             updatedAt: new Date(),
           };
-          if (reviewComments) {
-            updates.prReviewComments = reviewComments;
+          // prReviewComments is still on the task row for now as it's used for resume context
+          if (reviewComments && reviewComments !== task.prReviewComments) {
+            await db
+              .update(tasks)
+              .set({ prReviewComments: reviewComments })
+              .where(eq(tasks.id, task.id));
           }
-          await db.update(tasks).set(updates).where(eq(tasks.id, task.id));
 
-          await enqueueReconcile(
-            { kind: "repo", id: task.id },
-            { reason: `pr_watch:${prData.merged ? "merged" : prData.state}` },
-          );
+          const statusChanged =
+            taskRepo.prNumber !== prNumber ||
+            taskRepo.prState !== updates.prState ||
+            taskRepo.prChecksStatus !== effectiveChecksStatus ||
+            taskRepo.ciStatus !== checksStatus ||
+            taskRepo.prReviewStatus !== reviewStatus;
+
+          await db.update(taskRepos).set(updates).where(eq(taskRepos.id, taskRepo.id));
+
+          if (statusChanged) {
+            await enqueueReconcile(
+              { kind: "repo", id: task.id },
+              { reason: `pr_watch:${taskRepo.repoUrl}:${prData.merged ? "merged" : prData.state}` },
+            );
+          }
         } catch (err: any) {
-          logger.warn({ err, taskId: task.id }, "Failed to check PR status");
+          logger.warn(
+            { err, taskId: task.id, repoUrl: taskRepo.repoUrl },
+            "Failed to check PR status",
+          );
           if (err?.status === 401 || err?.message?.includes("Bad credentials")) {
             recordAuthEvent("github", err.message ?? "GitHub 401", "pr-watcher").catch(() => {});
           }

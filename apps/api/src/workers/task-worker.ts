@@ -300,6 +300,12 @@ export function startTaskWorker() {
             "global",
             taskWorkspaceId,
           ).catch(() => null)) as any) ?? undefined;
+        const agentDotfilesProfile =
+          ((await retrieveSecretWithFallback(
+            "AGENT_DOTFILES_PROFILE",
+            "global",
+            taskWorkspaceId,
+          ).catch(() => null)) as any) ?? undefined;
         const optioApiUrl = `http://${process.env.API_HOST ?? "host.docker.internal"}:${process.env.API_PORT ?? "4000"}`;
 
         // Load and render prompt template
@@ -351,6 +357,12 @@ export function startTaskWorker() {
         const finalClaudeModel =
           reviewOverride?.claudeModel ?? repoConfig?.claudeModel ?? undefined;
 
+        const { taskRepos: taskReposTable } = await import("../db/schema.js");
+        const taskRepos = await db
+          .select()
+          .from(taskReposTable)
+          .where(eq(taskReposTable.taskId, taskId));
+
         const agentConfig = adapter.buildContainerConfig({
           taskId: task.id,
           prompt: task.prompt,
@@ -381,6 +393,11 @@ export function startTaskWorker() {
           googleCloudProject,
           googleCloudLocation,
           claudeVertexServiceAccountKey,
+          agentDotfilesProfile,
+          repos: taskRepos.map((r) => ({
+            repoUrl: r.repoUrl,
+            repoBranch: r.repoBranch,
+          })),
         });
 
         // ── MCP servers & custom skills injection ────────────────────
@@ -818,6 +835,7 @@ export function startTaskWorker() {
         const shouldResetWorktree = isRetry && pod.id === (task as any).lastPodId;
         const execSession = await repoPool.execTaskInRepoPod(pod, task.id, agentCommand, allEnv, {
           resetWorktree: shouldResetWorktree,
+          taskRepos: taskRepos,
         });
 
         // Claude runs with `--input-format stream-json`, which means the initial
@@ -1759,6 +1777,7 @@ export function buildAgentCommand(
         : "";
       return [
         `echo "[optio] Running OpenCode (experimental)..."`,
+        `mkdir -p "${env.HOME ?? "/home/agent"}" "${env.XDG_CONFIG_HOME ?? "/home/agent/.config"}" "${env.XDG_DATA_HOME ?? "/home/agent/.local/share"}" "${env.XDG_STATE_HOME ?? "/home/agent/.local/state"}" "${env.XDG_CACHE_HOME ?? "/home/agent/.cache"}"`,
         `opencode run --format json${modelFlag}${agentFlag}${resumeFlag} "$OPTIO_PROMPT"`,
       ];
     }

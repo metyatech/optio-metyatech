@@ -76,6 +76,103 @@ describe("OpenCodeAdapter", () => {
       expect(config.env.OPTIO_REPO_BRANCH).toBe("main");
     });
 
+    it("sets up isolated XDG paths", () => {
+      const config = adapter.buildContainerConfig(baseInput);
+      const taskHome = "/home/agent/tasks/test-123/home";
+
+      expect(config.env.HOME).toBe(taskHome);
+      expect(config.env.XDG_CONFIG_HOME).toBe(`${taskHome}/.config`);
+      expect(config.env.XDG_DATA_HOME).toBe(`${taskHome}/.local/share`);
+      expect(config.env.XDG_STATE_HOME).toBe(`${taskHome}/.local/state`);
+      expect(config.env.XDG_CACHE_HOME).toBe(`${taskHome}/.cache`);
+
+      const configFile = config.setupFiles?.find((f) =>
+        f.path.endsWith(".config/opencode/opencode.json"),
+      );
+      expect(configFile?.path).toBe(`${taskHome}/.config/opencode/opencode.json`);
+    });
+
+    it("sets AGENT_DOTFILES_PROFILE", () => {
+      const config = adapter.buildContainerConfig({
+        ...baseInput,
+        agentDotfilesProfile: "windows",
+      });
+      expect(config.env.AGENT_DOTFILES_PROFILE).toBe("windows");
+    });
+
+    it("defaults AGENT_DOTFILES_PROFILE from the adapter host platform", () => {
+      const config = adapter.buildContainerConfig(baseInput);
+      expect(config.env.AGENT_DOTFILES_PROFILE).toBe(
+        process.platform === "win32" ? "windows" : "linux",
+      );
+    });
+
+    it("passes down multiple repos", () => {
+      const repos = [
+        { repoUrl: "https://github.com/org/repo1", repoBranch: "main" },
+        { repoUrl: "https://github.com/org/repo2", repoBranch: "develop" },
+      ];
+      const config = adapter.buildContainerConfig({
+        ...baseInput,
+        repos,
+      });
+      expect(JSON.parse(config.env.OPTIO_REPOS)).toEqual([
+        { repoUrl: "https://github.com/org/repo1", repoBranch: "main", workspacePath: "repo" },
+        {
+          repoUrl: "https://github.com/org/repo2",
+          repoBranch: "develop",
+          workspacePath: "repo-2",
+        },
+      ]);
+    });
+
+    it("passes task repo workspace boundaries to OpenCode", () => {
+      const config = adapter.buildContainerConfig({
+        ...baseInput,
+        taskRepos: [
+          {
+            repoUrl: "https://github.com/org/api",
+            repoBranch: "main",
+            workspacePath: "api",
+          },
+          {
+            repoUrl: "https://github.com/org/web",
+            repoBranch: "develop",
+            workspacePath: "web",
+          },
+        ],
+      } as any);
+
+      expect(config.env.OPTIO_WORKSPACE_ROOT).toBe("/workspace/tasks/test-123");
+      expect(config.env.OPTIO_PRIMARY_REPO_PATH).toBe("/workspace/tasks/test-123/api");
+      expect(JSON.parse(config.env.OPTIO_TASK_REPOS)).toEqual([
+        {
+          repoUrl: "https://github.com/org/api",
+          repoBranch: "main",
+          workspacePath: "api",
+        },
+        {
+          repoUrl: "https://github.com/org/web",
+          repoBranch: "develop",
+          workspacePath: "web",
+        },
+      ]);
+      expect(JSON.parse(config.env.OPTIO_WORKSPACE_BOUNDARIES)).toEqual([
+        {
+          repoUrl: "https://github.com/org/api",
+          repoBranch: "main",
+          workspacePath: "api",
+          absolutePath: "/workspace/tasks/test-123/api",
+        },
+        {
+          repoUrl: "https://github.com/org/web",
+          repoBranch: "develop",
+          workspacePath: "web",
+          absolutePath: "/workspace/tasks/test-123/web",
+        },
+      ]);
+    });
+
     it("requires provider API key secrets", () => {
       const config = adapter.buildContainerConfig(baseInput);
       expect(config.requiredSecrets).toContain("ANTHROPIC_API_KEY");

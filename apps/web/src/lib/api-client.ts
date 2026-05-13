@@ -1498,6 +1498,7 @@ export const api = {
     maxRetries?: number;
     repoUrl?: string;
     repoBranch?: string;
+    repos?: Array<{ repoUrl: string; repoBranch?: string }>;
     priority?: number;
     ticketSource?: string;
     ticketExternalId?: string;

@@ -37,6 +37,13 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   buildContainerConfig(input: AgentTaskInput): AgentContainerConfig {
     const prompt = input.renderedPrompt ?? input.prompt;
+    const agentHome = `/home/agent/tasks/${input.taskId}/home`;
+    const workspaceRoot = `/workspace/tasks/${input.taskId}`;
+    const taskRepos = buildTaskRepos(input as OpenCodeTaskInput);
+    const workspaceBoundaries = taskRepos.map((repo) => ({
+      ...repo,
+      absolutePath: `${workspaceRoot}/${repo.workspacePath}`,
+    }));
 
     const env: Record<string, string> = {
       OPTIO_TASK_ID: input.taskId,
@@ -45,7 +52,27 @@ export class OpenCodeAdapter implements AgentAdapter {
       OPTIO_PROMPT: prompt,
       OPTIO_AGENT_TYPE: "opencode",
       OPTIO_BRANCH_NAME: `${TASK_BRANCH_PREFIX}${input.taskId}`,
+      OPTIO_WORKSPACE_ROOT: workspaceRoot,
+      OPTIO_PRIMARY_REPO_PATH: `${workspaceRoot}/${taskRepos[0]?.workspacePath ?? "repo"}`,
+      OPTIO_TASK_REPOS: JSON.stringify(taskRepos),
+      OPTIO_WORKSPACE_BOUNDARIES: JSON.stringify(workspaceBoundaries),
     };
+
+    // Pass down multiple repositories if available
+    if (taskRepos.length > 0) {
+      env.OPTIO_REPOS = JSON.stringify(taskRepos);
+    }
+
+    // Set up isolated XDG paths for the agent
+    env.HOME = agentHome;
+    env.XDG_CONFIG_HOME = `${agentHome}/.config`;
+    env.XDG_DATA_HOME = `${agentHome}/.local/share`;
+    env.XDG_STATE_HOME = `${agentHome}/.local/state`;
+    env.XDG_CACHE_HOME = `${agentHome}/.cache`;
+
+    // Configure agent-dotfiles profile
+    // Allow runtime override, otherwise pick the profile matching the adapter host OS.
+    env.AGENT_DOTFILES_PROFILE = resolveAgentDotfilesProfile(input.agentDotfilesProfile);
 
     // OpenCode reads provider-specific env vars directly (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
     // These are injected via requiredSecrets
@@ -79,7 +106,7 @@ export class OpenCodeAdapter implements AgentAdapter {
 
     // Pre-seed a minimal opencode config so the CLI doesn't hit first-run setup
     setupFiles.push({
-      path: "/home/agent/.config/opencode/opencode.json",
+      path: `${agentHome}/.config/opencode/opencode.json`,
       content: JSON.stringify({ $schema: "https://opencode.ai/config.json" }),
     });
 
@@ -227,6 +254,56 @@ export class OpenCodeAdapter implements AgentAdapter {
       model,
     };
   }
+}
+
+type OpenCodeTaskInput = AgentTaskInput & {
+  taskRepos?: Array<{
+    repoUrl: string;
+    repoBranch: string;
+    workspacePath?: string;
+  }>;
+};
+
+function buildTaskRepos(input: OpenCodeTaskInput): Array<{
+  repoUrl: string;
+  repoBranch: string;
+  workspacePath: string;
+}> {
+  if (input.taskRepos && input.taskRepos.length > 0) {
+    return input.taskRepos.map((repo, index) => ({
+      repoUrl: repo.repoUrl,
+      repoBranch: repo.repoBranch,
+      workspacePath: repo.workspacePath ?? defaultWorkspacePath(index),
+    }));
+  }
+
+  if (input.repos && input.repos.length > 0) {
+    return input.repos.map((repo, index) => ({
+      repoUrl: repo.repoUrl,
+      repoBranch: repo.repoBranch ?? input.repoBranch,
+      workspacePath: defaultWorkspacePath(index),
+    }));
+  }
+
+  return [
+    {
+      repoUrl: input.repoUrl,
+      repoBranch: input.repoBranch,
+      workspacePath: "repo",
+    },
+  ];
+}
+
+function defaultWorkspacePath(index: number): string {
+  return index === 0 ? "repo" : `repo-${index + 1}`;
+}
+
+function resolveAgentDotfilesProfile(inputProfile?: string): string {
+  return inputProfile ?? process.env.AGENT_DOTFILES_PROFILE ?? defaultAgentDotfilesProfile();
+}
+
+function defaultAgentDotfilesProfile(): "windows" | "linux" {
+  return process.platform === "win32" ? "windows" : "linux";
 }
 
 function truncate(s: string, maxLen: number): string {

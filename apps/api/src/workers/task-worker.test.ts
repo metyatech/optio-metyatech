@@ -234,6 +234,25 @@ describe("buildAgentCommand", () => {
       expect(cmds.some((c) => c.includes("--session"))).toBe(true);
       expect(cmds.some((c) => c.includes("oc-sess-abc"))).toBe(true);
     });
+
+    it("creates isolated HOME and XDG directories before opencode run", () => {
+      const env = {
+        OPTIO_PROMPT: "Fix the bug",
+        HOME: "/home/agent/tasks/test-123/home",
+        XDG_CONFIG_HOME: "/home/agent/tasks/test-123/home/.config",
+        XDG_DATA_HOME: "/home/agent/tasks/test-123/home/.local/share",
+        XDG_STATE_HOME: "/home/agent/tasks/test-123/home/.local/state",
+        XDG_CACHE_HOME: "/home/agent/tasks/test-123/home/.cache",
+      };
+      const cmds = buildAgentCommand("opencode", env);
+
+      const mkdirCommand = cmds.find((c) => c.startsWith("mkdir -p"));
+      expect(mkdirCommand).toContain(env.HOME);
+      expect(mkdirCommand).toContain(env.XDG_CONFIG_HOME);
+      expect(mkdirCommand).toContain(env.XDG_DATA_HOME);
+      expect(mkdirCommand).toContain(env.XDG_STATE_HOME);
+      expect(mkdirCommand).toContain(env.XDG_CACHE_HOME);
+    });
   });
 
   describe("unknown agent", () => {

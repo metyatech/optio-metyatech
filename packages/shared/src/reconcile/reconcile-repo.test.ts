@@ -380,8 +380,6 @@ describe("reconcileRepo — QUEUED", () => {
           hasReviewSubtask: false,
           maxAutoResumes: 10,
           recentAutoResumeCount: 0,
-          maxAutoResumes: 10,
-          recentAutoResumeCount: 0,
         },
       },
     );
@@ -405,8 +403,6 @@ describe("reconcileRepo — QUEUED", () => {
           offPeakOnly: true,
           offPeakActive: false,
           hasReviewSubtask: false,
-          maxAutoResumes: 10,
-          recentAutoResumeCount: 0,
           maxAutoResumes: 10,
           recentAutoResumeCount: 0,
         },
