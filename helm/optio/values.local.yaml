@@ -4,13 +4,14 @@
 # (setup-local.sh applies this automatically)
 #
 # Overrides GHCR defaults with locally-built images (pullPolicy: Never)
-# so Docker Desktop / kind / minikube use images from the local daemon.
+# so Docker Desktop / kind / minikube use images imported into the node cache.
 
 # --- API Server ---
 api:
   image:
     repository: optio-api
     pullPolicy: Never
+    tag: "latest"
   service:
     type: NodePort
     nodePort: 30400
@@ -20,6 +21,7 @@ web:
   image:
     repository: optio-web
     pullPolicy: Never
+    tag: "latest"
   service:
     type: NodePort
     nodePort: 30310
@@ -29,6 +31,7 @@ optio:
   image:
     repository: optio-optio
     pullPolicy: Never
+    tag: "latest"
 
 # --- Agent containers ---
 agent:
@@ -36,6 +39,7 @@ agent:
     repository: optio-base
     pullPolicy: Never
     prefix: "optio-"
+    tag: "latest"
   imagePullPolicy: Never
 
 # --- Auth disabled for local dev ---
