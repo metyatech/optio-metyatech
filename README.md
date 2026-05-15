@@ -212,7 +212,8 @@ Connections give your agents access to external tools and data at runtime. Confi
 ### Prerequisites
 
 - **Kubernetes v1.33+** — required for post-quantum TLS on the control plane. v1.33 is the first release built on Go 1.24, which enables hybrid X25519MLKEM768 key exchange automatically. Earlier versions run but do not negotiate post-quantum TLS between Optio and the Kubernetes API server.
-- **Docker Desktop** with Kubernetes enabled (Settings → Kubernetes → Enable)
+- **Docker Desktop** or another Docker engine (Docker Desktop Kubernetes is not required)
+- **k3d** and **kubectl** for the local Kubernetes cluster
 - **Node.js 22+** and **pnpm 10+**
 - **Helm** (`brew install helm`)
 
@@ -223,11 +224,17 @@ git clone https://github.com/jonwiggins/optio.git && cd optio
 ./scripts/setup-local.sh
 ```
 
-That's it. The setup script installs dependencies, builds all Docker images (API, web, and agent presets), deploys the full stack to your local Kubernetes cluster via Helm, and installs metrics-server.
+On Windows PowerShell, run:
+
+```powershell
+.\scripts\setup-local.ps1
+```
+
+That's it. The setup script installs dependencies, creates or reuses a local k3d cluster (`optio-local`, or `optio-dev` if it already exists), installs ingress-nginx, builds and imports all Docker images (API, web, and agent presets), deploys the full stack via Helm, and installs metrics-server.
 
 ```
-Web UI ...... http://localhost:30310
-API ......... http://localhost:30400
+Web UI ...... http://localhost
+API health .. http://localhost/api/health
 ```
 
 Open the web UI and the setup wizard will walk you through configuring GitHub access, agent credentials (API key or Max/Pro subscription), and adding your first repository.
@@ -238,7 +245,13 @@ Open the web UI and the setup wizard will walk you through configuring GitHub ac
 ./scripts/update-local.sh
 ```
 
-Pulls latest code, rebuilds images, applies Helm changes, and rolling-restarts the deployments.
+On Windows PowerShell, run:
+
+```powershell
+.\scripts\update-local.ps1
+```
+
+Pulls latest code, rebuilds images, imports them into k3d, applies Helm changes, rolling-restarts the deployments, and checks `http://localhost/api/health` through ingress.
 
 ### Teardown
 
@@ -395,7 +408,7 @@ See the [Helm chart values](helm/optio/values.yaml) for full configuration optio
 | Web      | Next.js 15, Tailwind CSS 4, Zustand                                |
 | Database | PostgreSQL 16                                                      |
 | Queue    | Redis 7 + BullMQ                                                   |
-| Runtime  | Kubernetes (Docker Desktop for local dev)                          |
+| Runtime  | Kubernetes (k3d local dev; Docker engine for images)               |
 | Deploy   | Helm chart                                                         |
 | Auth     | Multi-provider OAuth (GitHub, Google, GitLab)                      |
 | CI       | GitHub Actions (format, typecheck, test, build-web, build-image)   |
