@@ -51,8 +51,8 @@ Pick by what shape of work you have:
 
 ## Running an example
 
-All scripts assume an Optio API at `http://localhost:30400` (the
-`setup-local.sh` default). Override with `OPTIO_API_URL`, and pass
+All scripts assume an Optio API at `http://localhost` (the `setup-local.sh`
+default). Override with `OPTIO_API_URL`, and pass
 `OPTIO_API_TOKEN` if your server requires auth (local dev with
 `OPTIO_AUTH_DISABLED=true` doesn't).
 

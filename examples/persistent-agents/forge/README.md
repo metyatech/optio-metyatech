@@ -27,7 +27,7 @@ This shows off three messaging patterns from the Scion / Athenaeum playbook:
 
 ## Setup
 
-Requires a running Optio API (default `http://localhost:30400`). See
+Requires a running Optio API (default `http://localhost`). See
 [../../README.md](../../README.md) for `setup-local.sh`.
 
 ```bash
