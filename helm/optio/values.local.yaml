@@ -4,7 +4,7 @@
 # (setup-local.sh applies this automatically)
 #
 # Overrides GHCR defaults with locally-built images (pullPolicy: Never)
-# so Docker Desktop / kind / minikube use images imported into the node cache.
+# so k3d local development uses images imported into the node cache.
 
 # --- API Server ---
 api:
@@ -13,8 +13,8 @@ api:
     pullPolicy: Never
     tag: "latest"
   service:
-    type: NodePort
-    nodePort: 30400
+    type: ClusterIP
+    nodePort: ""
 
 # --- Web UI ---
 web:
@@ -23,8 +23,8 @@ web:
     pullPolicy: Never
     tag: "latest"
   service:
-    type: NodePort
-    nodePort: 30310
+    type: ClusterIP
+    nodePort: ""
 
 # --- Optio operations assistant ---
 optio:
@@ -45,6 +45,25 @@ agent:
 # --- Auth disabled for local dev ---
 auth:
   disabled: true
+
+# --- Single localhost entrypoint via k3d + ingress-nginx ---
+publicUrl: http://localhost
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: localhost
+      paths:
+        - path: /
+          pathType: Prefix
+          service: web
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /ws
+          pathType: Prefix
+          service: api
 
 # --- Local Postgres password ---
 postgresql:

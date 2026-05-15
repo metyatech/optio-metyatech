@@ -1,5 +1,16 @@
 Optio has been installed in the {{ .Values.namespace }} namespace.
 
+{{- if .Values.ingress.enabled }}
+{{- $ingressTlsEnabled := or (and .Values.ingress.certManager .Values.ingress.certManager.enabled) (not (empty .Values.ingress.tls)) }}
+{{- $scheme := ternary "https" "http" $ingressTlsEnabled }}
+
+Ingress is enabled (class: {{ .Values.ingress.className | default "default" }}).
+{{- range .Values.ingress.hosts }}
+
+Web UI:      {{ $scheme }}://{{ .host }}
+API health:  {{ $scheme }}://{{ .host }}/api/health
+{{- end }}
+{{- else }}
 {{- if eq .Values.api.service.type "NodePort" }}
 
 API server:  http://localhost:{{ .Values.api.service.nodePort | default .Values.api.port }}
@@ -12,14 +23,6 @@ Web UI:      http://localhost:{{ .Values.web.service.nodePort | default .Values.
 {{- else }}
 Web UI:      kubectl port-forward -n {{ .Values.namespace }} svc/{{ .Release.Name }}-web {{ .Values.web.port }}:{{ .Values.web.port }}
 {{- end }}
-
-{{- if .Values.ingress.enabled }}
-
----
-
-INGRESS
-
-Traffic is routed via Ingress ({{ .Values.ingress.className }}).
 {{- end }}
 {{- if and .Values.gatewayAPI.enabled (.Capabilities.APIVersions.Has "gateway.networking.k8s.io/v1") }}
 
@@ -54,7 +57,7 @@ If your cluster does not have it installed, run:
 
   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 
-For Docker Desktop / kind / minikube, also patch with --kubelet-insecure-tls:
+For local clusters such as Docker Desktop, k3d, kind, or minikube, also patch with --kubelet-insecure-tls:
 
   kubectl patch deployment metrics-server -n kube-system --type=json \
     -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
