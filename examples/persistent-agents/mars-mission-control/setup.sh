@@ -2,7 +2,7 @@
 # Provision the Mars Mission Control demo into the running Optio API.
 #
 # Usage:
-#   OPTIO_API_URL=http://localhost:30400 ./setup.sh
+#   OPTIO_API_URL=http://localhost ./setup.sh
 #   SOL_INTERVAL_MINUTES=3 ./setup.sh   # faster demo
 #
 # Idempotent: agent slugs are unique per workspace, so re-runs skip existing
@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-API="${OPTIO_API_URL:-http://localhost:30400}"
+API="${OPTIO_API_URL:-http://localhost}"
 SOL_INTERVAL_MINUTES="${SOL_INTERVAL_MINUTES:-10}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 

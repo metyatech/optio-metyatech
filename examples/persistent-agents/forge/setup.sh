@@ -2,14 +2,14 @@
 # Provision the Forge multi-agent demo into the running Optio API.
 #
 # Usage:
-#   OPTIO_API_URL=http://localhost:30400 ./demos/the-forge/setup.sh
+#   OPTIO_API_URL=http://localhost ./examples/persistent-agents/forge/setup.sh
 #
 # Idempotent: re-runs are safe (server-side slug uniqueness returns 409,
 # which we treat as "already exists").
 
 set -euo pipefail
 
-API="${OPTIO_API_URL:-http://localhost:30400}"
+API="${OPTIO_API_URL:-http://localhost}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Optional bearer token for API auth — set OPTIO_API_TOKEN if your server
