@@ -178,12 +178,12 @@ export default function Home() {
               <p>
                 <span className="text-success">$</span> ./scripts/setup-local.sh
               </p>
-              <p className="text-text-muted/50 pt-2"># Dashboard at http://localhost:30310</p>
-              <p className="text-text-muted/50"># API at http://localhost:30400</p>
+              <p className="text-text-muted/50 pt-2"># Dashboard at http://localhost</p>
+              <p className="text-text-muted/50"># API health at http://localhost/api/health</p>
             </div>
           </div>
           <p className="mt-4 text-[13px] text-text-muted">
-            Requires Docker Desktop with Kubernetes enabled.{" "}
+            Requires Docker Desktop or another Docker engine, plus k3d.{" "}
             <Link href="/docs/installation" className="text-primary-light hover:underline">
               Full installation guide &rarr;
             </Link>

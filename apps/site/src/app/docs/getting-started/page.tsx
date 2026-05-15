@@ -23,13 +23,15 @@ export default function GettingStartedPage() {
 
       <h2 className="mt-10 text-2xl font-bold text-text-heading">Quick Start</h2>
       <p className="mt-3 text-text-muted leading-relaxed">
-        The fastest way to try Optio is with Docker Desktop&apos;s built-in Kubernetes. The setup
-        script handles everything: building images, installing dependencies, and deploying via Helm.
+        The fastest way to try Optio is with k3d on top of Docker Desktop or another Docker engine.
+        The setup script handles everything: building images, installing dependencies, installing
+        ingress-nginx, and deploying via Helm.
       </p>
 
       <h3 className="mt-6 text-lg font-semibold text-text-heading">Prerequisites</h3>
       <ul className="mt-3 list-disc pl-5 space-y-1 text-[14px] text-text-muted">
-        <li>Docker Desktop with Kubernetes enabled</li>
+        <li>Docker Desktop or another Docker engine</li>
+        <li>k3d</li>
         <li>Node.js 22+</li>
         <li>pnpm 10+</li>
         <li>Helm 3+</li>
@@ -44,8 +46,9 @@ cd optio
       </div>
 
       <p className="mt-4 text-text-muted leading-relaxed">
-        The script builds all container images (API, web, agent presets), installs the Helm chart,
-        and starts the services. This takes a few minutes on first run.
+        The script creates or reuses a local k3d cluster, builds all container images (API, web,
+        agent presets), imports them into k3d, installs the Helm chart, and starts the services.
+        This takes a few minutes on first run.
       </p>
 
       <Callout type="info">
@@ -59,13 +62,13 @@ cd optio
         <li>
           <strong className="text-text-heading">Dashboard:</strong>{" "}
           <code className="rounded bg-bg-hover px-1.5 py-0.5 text-[13px] font-mono">
-            http://localhost:30310
+            http://localhost
           </code>
         </li>
         <li>
-          <strong className="text-text-heading">API:</strong>{" "}
+          <strong className="text-text-heading">API health:</strong>{" "}
           <code className="rounded bg-bg-hover px-1.5 py-0.5 text-[13px] font-mono">
-            http://localhost:30400
+            http://localhost/api/health
           </code>
         </li>
       </ul>

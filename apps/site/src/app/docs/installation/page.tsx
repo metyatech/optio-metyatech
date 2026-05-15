@@ -57,8 +57,8 @@ cd optio
         </li>
         <li>Builds all agent images (base, node, python, go, rust, full)</li>
         <li>Builds API and web Docker images</li>
-        <li>Installs the Kubernetes metrics-server</li>
-        <li>Deploys via Helm with NodePort services (API: 30400, Web: 30310)</li>
+        <li>Installs ingress-nginx and the Kubernetes metrics-server</li>
+        <li>Deploys via Helm behind a single local Ingress at http://localhost</li>
       </ol>
 
       <Callout type="tip">

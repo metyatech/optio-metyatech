@@ -47,8 +47,8 @@ export default function ConfigurationPage() {
               ],
               [
                 "PUBLIC_URL",
-                "http://localhost:30400",
-                "Public URL of the API server (used for OAuth callbacks)",
+                "http://localhost",
+                "Public same-origin URL for web and API (used for OAuth callbacks)",
               ],
               ["PORT", "4000", "API server port"],
             ].map(([name, def, desc]) => (
@@ -246,15 +246,29 @@ openssl rand -hex 32`}</CodeBlock>
 
       <h3 className="mt-6 text-lg font-semibold text-text-heading">Services</h3>
       <div className="mt-3">
-        <CodeBlock title="values.yaml">{`# Local dev (NodePort for direct access)
+        <CodeBlock title="values.yaml">{`# Local dev (k3d + ingress-nginx)
+publicUrl: http://localhost
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: localhost
+      paths:
+        - path: /
+          pathType: Prefix
+          service: web
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /ws
+          pathType: Prefix
+          service: api
 api:
   service:
-    type: NodePort
-    nodePort: 30400
+    type: ClusterIP
 web:
   service:
-    type: NodePort
-    nodePort: 30310
+    type: ClusterIP
 
 # Production (ClusterIP behind ingress)
 api:
