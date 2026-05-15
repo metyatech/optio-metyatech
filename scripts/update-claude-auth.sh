@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-API_URL="${OPTIO_API_URL:-http://localhost:30400}"
+API_URL="${OPTIO_API_URL:-http://localhost}"
 
 echo "=== Optio — refresh Claude Code OAuth token ==="
 echo ""
