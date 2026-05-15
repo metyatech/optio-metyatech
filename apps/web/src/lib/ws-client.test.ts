@@ -236,13 +236,13 @@ describe("getWsBaseUrl", () => {
     vi.stubEnv("NEXT_PUBLIC_WS_URL", "");
     Object.defineProperty(globalThis, "window", {
       value: {
-        location: { protocol: "http:", host: "localhost:30310" },
-        __OPTIO_CONFIG: { publicApiUrl: "http://localhost:30400" },
+        location: { protocol: "http:", host: "app.example.test" },
+        __OPTIO_CONFIG: { publicApiUrl: "http://api.example.test" },
       },
       writable: true,
       configurable: true,
     });
-    expect(getWsBaseUrl()).toBe("ws://localhost:30400");
+    expect(getWsBaseUrl()).toBe("ws://api.example.test");
   });
 
   it("returns ws:// + host for http: pages", () => {

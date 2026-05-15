@@ -24,9 +24,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   // Inject runtime config so client-side code can derive the API WebSocket URL.
-  // PUBLIC_API_URL is the browser-reachable API URL (e.g. http://localhost:30400
-  // for local dev with NodePort, or empty for production ingress where web and
-  // API share the same host).
+  // PUBLIC_API_URL is only needed when web and API are intentionally served from
+  // different browser origins; leave it empty for same-origin ingress.
   const publicApiUrl = process.env.PUBLIC_API_URL ?? "";
 
   // Default to dark; ThemeProvider applies the correct class on mount
