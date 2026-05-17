@@ -220,6 +220,27 @@ describe("POST /api/setup/validate/github-token", () => {
     expect(res.json().user.login).toBe("testuser");
   });
 
+  it("normalizes a valid GitHub token response with a null profile name", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ login: "noname", name: null }),
+      }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/setup/validate/github-token",
+      payload: { token: "ghp_valid_token" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().valid).toBe(true);
+    expect(res.json().user.login).toBe("noname");
+    expect(res.json().user.name).toBe("");
+  });
+
   it("returns invalid for bad token", async () => {
     vi.stubGlobal(
       "fetch",

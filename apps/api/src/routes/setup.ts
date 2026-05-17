@@ -216,8 +216,8 @@ export async function setupRoutes(rawApp: FastifyInstance) {
         if (!res.ok) {
           return reply.send({ valid: false, error: `GitHub returned ${res.status}` });
         }
-        const user = (await res.json()) as { login: string; name: string };
-        reply.send({ valid: true, user: { login: user.login, name: user.name } });
+        const user = (await res.json()) as { login: string; name: string | null };
+        reply.send({ valid: true, user: { login: user.login, name: user.name ?? "" } });
       } catch (err) {
         app.log.error(err, "GitHub token validation failed");
         reply.send({ valid: false, error: sanitizeError(err) });
