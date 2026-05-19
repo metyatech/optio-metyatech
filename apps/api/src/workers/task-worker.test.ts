@@ -1,5 +1,25 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { AgentContainerConfig } from "@optio/shared";
+
+// Stub BullMQ so importing task-worker utilities does not try to connect to Redis.
+vi.mock("bullmq", () => ({
+  Queue: class {
+    add() {
+      return Promise.resolve();
+    }
+  },
+  Worker: class {
+    on() {}
+    close() {
+      return Promise.resolve();
+    }
+  },
+}));
+
+vi.mock("../services/redis-config.js", () => ({
+  getBullMQConnectionOptions: () => ({}),
+}));
+
 import {
   applyApprovedPlanSetup,
   buildAgentCommand,
