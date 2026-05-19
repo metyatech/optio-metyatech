@@ -705,6 +705,7 @@ describe("secret-service", () => {
         { name: "CLAUDE_CODE_OAUTH_TOKEN", scope: "global", value: "should-be-blocked" },
         { name: "ANTHROPIC_API_KEY", scope: "global", value: "should-be-blocked" },
         { name: "OPENAI_API_KEY", scope: "global", value: "should-be-blocked" },
+        { name: "CODEX_AUTH_JSON", scope: "global", value: "should-be-blocked" },
         { name: "GEMINI_API_KEY", scope: "global", value: "should-be-blocked" },
       ]);
 
@@ -713,6 +714,7 @@ describe("secret-service", () => {
       expect(result.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
       expect(result.ANTHROPIC_API_KEY).toBeUndefined();
       expect(result.OPENAI_API_KEY).toBeUndefined();
+      expect(result.CODEX_AUTH_JSON).toBeUndefined();
       expect(result.GEMINI_API_KEY).toBeUndefined();
     });
   });
@@ -722,6 +724,7 @@ describe("secret-service", () => {
       expect(IDENTITY_SECRET_DENYLIST).toContain("CLAUDE_CODE_OAUTH_TOKEN");
       expect(IDENTITY_SECRET_DENYLIST).toContain("ANTHROPIC_API_KEY");
       expect(IDENTITY_SECRET_DENYLIST).toContain("OPENAI_API_KEY");
+      expect(IDENTITY_SECRET_DENYLIST).toContain("CODEX_AUTH_JSON");
       expect(IDENTITY_SECRET_DENYLIST).toContain("GEMINI_API_KEY");
     });
   });

@@ -50,6 +50,39 @@ function parseGitHubOwnerRepo(source: string): { owner: string; repo: string } |
   return m ? { owner: m[1], repo: m[2] } : null;
 }
 
+function validateCodexAuthJsonForSetup(content: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error("Codex auth.json must be valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Codex auth.json must be a JSON object");
+  }
+  if (
+    hasCodexAuthTokenFields(parsed) ||
+    (parsed as Record<string, unknown>).auth_mode === "chatgpt"
+  ) {
+    return;
+  }
+  throw new Error('Codex auth.json must have auth_mode="chatgpt" or contain token fields');
+}
+
+function hasCodexAuthTokenFields(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasCodexAuthTokenFields);
+  const obj = value as Record<string, unknown>;
+  if (
+    ["access_token", "id_token", "refresh_token"].some(
+      (key) => typeof obj[key] === "string" && (obj[key] as string).length > 0,
+    )
+  ) {
+    return true;
+  }
+  return Object.values(obj).some(hasCodexAuthTokenFields);
+}
+
 export default function SetupPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
@@ -102,8 +135,12 @@ export default function SetupPage() {
   const [claudeVertexKeyError, setClaudeVertexKeyError] = useState("");
 
   // Step 3: Codex auth mode
-  const [codexAuthMode, setCodexAuthMode] = useState<"api-key" | "app-server">("api-key");
+  const [codexAuthMode, setCodexAuthMode] = useState<"api-key" | "app-server" | "chatgpt">(
+    "api-key",
+  );
   const [codexAppServerUrl, setCodexAppServerUrl] = useState("");
+  const [codexAuthJson, setCodexAuthJson] = useState("");
+  const [codexAuthJsonError, setCodexAuthJsonError] = useState("");
 
   // Step 3: Copilot token
   const [copilotToken, setCopilotToken] = useState("");
@@ -269,8 +306,22 @@ export default function SetupPage() {
         ? claudeVertexProject.trim().length > 0
         : anthropicValidated;
 
+  const codexAuthJsonReady = (() => {
+    if (!codexAuthJson.trim()) return false;
+    try {
+      validateCodexAuthJsonForSetup(codexAuthJson);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
   const codexReady =
-    codexAuthMode === "app-server" ? codexAppServerUrl.trim().length > 0 : openaiValidated;
+    codexAuthMode === "app-server"
+      ? codexAppServerUrl.trim().length > 0
+      : codexAuthMode === "chatgpt"
+        ? codexAuthJsonReady
+        : openaiValidated;
 
   const copilotReady = copilotValidated;
 
@@ -568,6 +619,21 @@ export default function SetupPage() {
       if (codexAuthMode === "app-server" && codexAppServerUrl.trim()) {
         await api.createSecret({ name: "CODEX_AUTH_MODE", value: "app-server" });
         await api.createSecret({ name: "CODEX_APP_SERVER_URL", value: codexAppServerUrl.trim() });
+      } else if (codexAuthMode === "chatgpt" && codexAuthJson.trim()) {
+        try {
+          validateCodexAuthJsonForSetup(codexAuthJson);
+          setCodexAuthJsonError("");
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Invalid Codex auth.json";
+          setCodexAuthJsonError(message);
+          throw err;
+        }
+        await api.createSecret({ name: "CODEX_AUTH_MODE", value: "chatgpt" });
+        await api.createSecret({
+          name: "CODEX_AUTH_JSON",
+          value: codexAuthJson,
+          scope: agentSecretScope,
+        });
       } else if (openaiKey.trim() && openaiValidated) {
         await api.createSecret({ name: "CODEX_AUTH_MODE", value: "api-key" });
         await api.createSecret({
@@ -613,7 +679,11 @@ export default function SetupPage() {
       }
       goNext();
     } catch (err) {
-      toast.error("Failed to save API keys");
+      if (codexAuthMode === "chatgpt" && err instanceof Error) {
+        toast.error(err.message);
+      } else {
+        toast.error("Failed to save API keys");
+      }
     } finally {
       setLoading(false);
     }
@@ -1576,12 +1646,14 @@ export default function SetupPage() {
                       className="mt-0.5"
                     />
                     <div className="flex-1">
-                      <span className="text-sm font-medium">
-                        Use ChatGPT subscription (app-server)
-                      </span>
+                      <span className="text-sm font-medium">Use app-server endpoint</span>
                       <p className="text-xs text-text-muted mt-0.5">
-                        Run Codex CLI with your ChatGPT Plus/Pro plan — no API key costs. Start the
-                        Codex desktop app or run{" "}
+                        Legacy local endpoint mode. For ChatGPT subscription auth, prefer the
+                        auth.json option below; Codex exec no longer accepts a remote endpoint flag.
+                        If you still run an app-server, provide its endpoint for compatibility.
+                      </p>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        Start the Codex desktop app or run{" "}
                         <code className="px-1 py-0.5 bg-bg-card rounded text-primary text-[11px]">
                           codex --app-server
                         </code>{" "}
@@ -1611,6 +1683,66 @@ export default function SetupPage() {
                           {codexAppServerUrl.trim().length > 0 && (
                             <span className="text-xs text-success flex items-center gap-1">
                               <Check className="w-3 h-3" /> Endpoint configured
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </label>
+
+                  <label
+                    className={cn(
+                      "flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors",
+                      codexAuthMode === "chatgpt"
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:border-text-muted",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="codex-auth"
+                      checked={codexAuthMode === "chatgpt"}
+                      onChange={() => setCodexAuthMode("chatgpt")}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <span className="text-sm font-medium">
+                        Use ChatGPT subscription (auth.json)
+                      </span>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        Paste the local Codex CLI auth.json content. Optio stores it encrypted and
+                        writes it only as a task-scoped <code>auth.json</code> file for Codex runs.
+                      </p>
+                      {codexAuthMode === "chatgpt" && (
+                        <div className="mt-3 space-y-2">
+                          <textarea
+                            value={codexAuthJson}
+                            onChange={(e) => {
+                              const next = e.target.value;
+                              setCodexAuthJson(next);
+                              setCodexAuthJsonError("");
+                              if (next.trim()) {
+                                try {
+                                  validateCodexAuthJsonForSetup(next);
+                                } catch (err) {
+                                  setCodexAuthJsonError(
+                                    err instanceof Error ? err.message : "Invalid auth.json",
+                                  );
+                                }
+                              }
+                            }}
+                            placeholder='{"auth_mode":"chatgpt",...}'
+                            rows={5}
+                            className="w-full px-3 py-2 rounded-md bg-bg-card border border-border text-xs font-mono focus:outline-none focus:border-primary resize-none"
+                          />
+                          {codexAuthJsonError && (
+                            <p className="text-error text-xs flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" /> {codexAuthJsonError}
+                            </p>
+                          )}
+                          {codexAuthJsonReady && (
+                            <span className="text-xs text-success flex items-center gap-1">
+                              <Check className="w-3 h-3" /> auth.json ready to save
                             </span>
                           )}
                         </div>
@@ -2536,10 +2668,17 @@ export default function SetupPage() {
                     </span>
                   </div>
                 )}
-                {openaiValidated && (
+                {codexReady && (
                   <div className="flex items-center gap-2 text-sm">
                     <CheckCircle className="w-4 h-4 text-success" />
-                    <span>OpenAI Codex: ready</span>
+                    <span>
+                      OpenAI Codex:{" "}
+                      {codexAuthMode === "chatgpt"
+                        ? "ChatGPT auth.json"
+                        : codexAuthMode === "app-server"
+                          ? "app-server"
+                          : "API key"}
+                    </span>
                   </div>
                 )}
                 {geminiReady && (

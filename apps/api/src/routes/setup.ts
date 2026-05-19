@@ -131,6 +131,7 @@ export async function setupRoutes(rawApp: FastifyInstance) {
       const hasClaudeVertexAi = secretNames.includes("CLAUDE_VERTEX_PROJECT_ID");
 
       const hasCodexAppServer = secretNames.includes("CODEX_APP_SERVER_URL");
+      const hasCodexAuthJson = secretNames.includes("CODEX_AUTH_JSON");
 
       const hasCopilotToken = secretNames.includes("COPILOT_GITHUB_TOKEN");
 
@@ -150,6 +151,7 @@ export async function setupRoutes(rawApp: FastifyInstance) {
         hasOauthToken ||
         hasClaudeVertexAi ||
         hasCodexAppServer ||
+        hasCodexAuthJson ||
         hasCopilotToken ||
         hasGeminiKey ||
         hasGeminiVertexAi ||
@@ -177,6 +179,7 @@ export async function setupRoutes(rawApp: FastifyInstance) {
           },
           openaiKey: { done: hasOpenAIKey, label: "OpenAI API key" },
           codexAppServer: { done: hasCodexAppServer, label: "Codex app-server" },
+          codexChatGpt: { done: hasCodexAuthJson, label: "Codex ChatGPT auth.json" },
           copilotToken: { done: hasCopilotToken, label: "GitHub Copilot token" },
           opencodeConfigured: {
             done: opencodeConfigured,

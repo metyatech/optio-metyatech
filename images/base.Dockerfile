@@ -64,6 +64,9 @@ RUN (curl -fsSL https://opencode.ai/install | bash \
   && rm -rf /root/.opencode) \
   || echo "WARN: opencode install failed; opencode agent will not be available in this image"
 
+# OpenAI Codex
+RUN npm install -g @openai/codex
+
 # Google Gemini CLI
 RUN npm install -g @google/gemini-cli
 

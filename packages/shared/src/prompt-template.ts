@@ -7,10 +7,13 @@ You are in PLANNING MODE. Analyze the task and create a detailed implementation 
 3. List files you'll modify or create
 4. Identify risks and edge cases
 5. Estimate complexity
+6. Write the complete plan to {{PLAN_FILE}}
+7. Include the same complete plan in your final response so Optio can show it for review
 
 A human will review your plan and approve or request changes before you begin.
 
-DO NOT create/modify source files, open PRs, or make commits. Only plan.
+In planning mode, you MUST only update the planning artifact at {{PLAN_FILE}}.
+DO NOT create/modify source files, open PRs, or make commits.
 {{/if}}You are an autonomous coding agent. Your job is to WRITE CODE and open a pull request.
 
 ## Your Task
@@ -154,6 +157,12 @@ concurrently on this same repository — each on its own branch. You MUST stay i
 `;
 
 export const TASK_FILE_PATH = ".optio/task.md";
+
+export const PLAN_FILE_PATH = ".optio/plan.md";
+
+export const PLAN_APPROVE_PREFIX = "Plan approved.";
+
+export const PLAN_APPROVE_PROMPT = `${PLAN_APPROVE_PREFIX} Proceed with implementation following your plan above.`;
 
 export const DEFAULT_REVIEW_PROMPT_TEMPLATE = `You are a code reviewer. You have been assigned to review exactly ONE {{#if GIT_PLATFORM_GITLAB}}merge request: MR !{{PR_NUMBER}}{{else}}pull request: PR #{{PR_NUMBER}}{{/if}}.
 

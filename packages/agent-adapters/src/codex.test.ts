@@ -33,6 +33,12 @@ describe("CodexAdapter", () => {
       expect(result.missing).toEqual([]);
     });
 
+    it("does not require OPENAI_API_KEY in chatgpt mode", () => {
+      const result = adapter.validateSecrets([], "chatgpt");
+      expect(result.valid).toBe(true);
+      expect(result.missing).toEqual([]);
+    });
+
     it("requires OPENAI_API_KEY in api-key mode", () => {
       const result = adapter.validateSecrets([], "api-key");
       expect(result.valid).toBe(false);
@@ -107,6 +113,15 @@ describe("CodexAdapter", () => {
       });
       expect(config.requiredSecrets).toEqual([]);
       expect(config.requiredSecrets).not.toContain("OPENAI_API_KEY");
+    });
+
+    it("does not require OPENAI_API_KEY in chatgpt mode", () => {
+      const config = adapter.buildContainerConfig({
+        ...baseInput,
+        codexAuthMode: "chatgpt",
+      });
+      expect(config.requiredSecrets).toEqual([]);
+      expect(config.env.OPTIO_CODEX_AUTH_MODE).toBe("chatgpt");
     });
 
     it("sets OPTIO_CODEX_AUTH_MODE and OPTIO_CODEX_APP_SERVER_URL in app-server mode", () => {

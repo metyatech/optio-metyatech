@@ -5,14 +5,18 @@ import {
   renderPromptTemplate,
   renderTaskFile,
   TASK_FILE_PATH,
+  PLAN_FILE_PATH,
   DEFAULT_MAX_TURNS_CODING,
   DEFAULT_MAX_TURNS_REVIEW,
+  type AgentContainerConfig,
+  type AgentLogEntry,
   type PresetImageId,
   msUntilOffPeak,
   classifyError,
   parseRepoUrl,
   parsePrUrl,
   parseIntEnv,
+  type CodexAuthMode,
 } from "@optio/shared";
 import { getAdapter } from "@optio/agent-adapters";
 import { parseClaudeEvent } from "../services/agent-event-parser.js";
@@ -56,6 +60,49 @@ const connectionOpts = getBullMQConnectionOptions();
 
 export const taskQueue = new Queue("tasks", { connection: connectionOpts });
 
+function codexChatGptHome(taskId: string): string {
+  return `/workspace/tasks/${taskId}/.codex`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateCodexChatGptAuthJson(authJson: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(authJson);
+  } catch {
+    throw new Error("CODEX_AUTH_JSON must be valid JSON");
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error("CODEX_AUTH_JSON must be a Codex auth.json object");
+  }
+
+  if (parsed.auth_mode !== "chatgpt" && !hasCodexTokenFields(parsed)) {
+    throw new Error('CODEX_AUTH_JSON must have auth_mode="chatgpt" or contain Codex token fields');
+  }
+}
+
+function applyCodexChatGptAuthSetup(
+  agentConfig: AgentContainerConfig,
+  taskId: string,
+  authJson: string,
+): void {
+  validateCodexChatGptAuthJson(authJson);
+
+  const codexHome = codexChatGptHome(taskId);
+  agentConfig.env.CODEX_HOME = codexHome;
+  agentConfig.setupFiles = agentConfig.setupFiles ?? [];
+  agentConfig.setupFiles.push({
+    path: `${codexHome}/auth.json`,
+    content: "",
+    contentBase64: Buffer.from(authJson, "utf8").toString("base64"),
+    sensitive: true,
+  });
+}
+
 /**
  * Serialized claim lock.
  * Prevents concurrent BullMQ workers from all passing the concurrency
@@ -84,6 +131,8 @@ export function startTaskWorker() {
         taskId,
         resumeSessionId,
         resumePrompt,
+        approvedPlanPath,
+        approvedPlanContent,
         restartFromBranch,
         reviewOverride,
         provisioningRetryCount = 0,
@@ -91,6 +140,8 @@ export function startTaskWorker() {
         taskId: string;
         resumeSessionId?: string;
         resumePrompt?: string;
+        approvedPlanPath?: string;
+        approvedPlanContent?: string;
         restartFromBranch?: boolean;
         provisioningRetryCount?: number;
         reviewOverride?: {
@@ -248,7 +299,7 @@ export function startTaskWorker() {
         const codexAuthMode =
           ((await retrieveSecretWithFallback("CODEX_AUTH_MODE", "global", taskWorkspaceId).catch(
             () => null,
-          )) as any) ?? "api-key";
+          )) as CodexAuthMode | null) ?? "api-key";
         const codexAppServerUrl =
           codexAuthMode === "app-server"
             ? (((await retrieveSecretWithFallback(
@@ -321,13 +372,19 @@ export function startTaskWorker() {
         const isCodeCommit = parsedRepo?.platform === "codecommit";
         const branchName = `${TASK_BRANCH_PREFIX}${task.id}`;
         const taskFilePath = TASK_FILE_PATH;
+        const planFilePath = PLAN_FILE_PATH;
 
-        // Enable planning mode for fresh runs (not resumed) when repo has it enabled
-        const isPlanningRun =
-          !!repoConfig?.planningModeEnabled && !resumeSessionId && !reviewOverride;
+        // Enable planning mode for fresh runs (not resumed) when task has it enabled
+        const isPlanningRun = shouldRunPlanningMode({
+          planningModeEnabled: !!task.planningModeEnabled,
+          resumeSessionId,
+          hasReviewOverride: !!reviewOverride,
+          approvedPlanPath,
+        });
 
         const renderedPrompt = renderPromptTemplate(promptConfig.template, {
           TASK_FILE: taskFilePath,
+          PLAN_FILE: planFilePath,
           BRANCH_NAME: branchName,
           TASK_ID: task.id,
           TASK_TITLE: task.title,
@@ -399,6 +456,25 @@ export function startTaskWorker() {
             repoBranch: r.repoBranch,
           })),
         });
+
+        applyApprovedPlanSetup(agentConfig, approvedPlanPath, approvedPlanContent);
+
+        const taskUserId = task.createdBy ?? null;
+        if (task.agentType === "codex" && codexAuthMode === "chatgpt") {
+          const codexAuthJson = await retrieveSecretWithFallback(
+            "CODEX_AUTH_JSON",
+            "global",
+            taskWorkspaceId,
+            taskUserId,
+          ).catch(() => null);
+          if (!codexAuthJson) {
+            throw new Error(
+              "Codex ChatGPT auth mode selected but no CODEX_AUTH_JSON secret found. " +
+                "Paste the Codex auth.json content in the setup wizard.",
+            );
+          }
+          configureCodexChatGptAuth(agentConfig, task.id, codexAuthJson as string);
+        }
 
         // ── MCP servers & custom skills injection ────────────────────
         const { getMcpServersForTask, buildMcpJsonContent } =
@@ -626,7 +702,6 @@ export function startTaskWorker() {
             ...(!isGitHubAppConfigured() ? ["GITHUB_TOKEN"] : []),
           ]),
         ];
-        const taskUserId = task.createdBy ?? null;
         const resolvedSecrets = await resolveSecretsForTask(
           secretNames,
           task.repoUrl,
@@ -858,6 +933,7 @@ export function startTaskWorker() {
         let capturedPrUrl: string | undefined = restartFromBranch
           ? (task.prUrl ?? undefined)
           : undefined;
+        let agentOutputEntryCount = 0;
         let lastHeartbeat = Date.now();
         const HEARTBEAT_INTERVAL_MS = 60_000;
         // Stall detection: debounced activity timestamp flush
@@ -965,6 +1041,7 @@ export function startTaskWorker() {
                 log.warn({ err }, "Failed to close agent stdin on terminal event");
               }
             }
+            agentOutputEntryCount += countAgentStartupEvidenceEntries(line, parsed.entries);
             for (const entry of parsed.entries) {
               await taskService.appendTaskLog(
                 taskId,
@@ -1050,6 +1127,7 @@ export function startTaskWorker() {
                     : task.agentType === "openclaw"
                       ? parseOpenClawEvent(lineBuf, taskId)
                       : parseClaudeEvent(lineBuf, taskId);
+          agentOutputEntryCount += countAgentStartupEvidenceEntries(lineBuf, parsed.entries);
           for (const entry of parsed.entries) {
             await taskService.appendTaskLog(
               taskId,
@@ -1165,7 +1243,14 @@ export function startTaskWorker() {
         }
         const detectedPrUrl = capturedPrUrl || taskAfterExec?.prUrl || fallbackPrUrl;
 
-        if (!sessionId && !isReviewTask) {
+        if (
+          !hasAgentStartupEvidence({
+            agentType: task.agentType,
+            sessionId,
+            outputEntryCount: agentOutputEntryCount,
+          }) &&
+          !isReviewTask
+        ) {
           // Agent never started — no session ID means no agent output was produced.
           await repoPool.updateWorktreeState(taskId, "dirty");
           await taskService.transitionTask(
@@ -1682,6 +1767,68 @@ export function buildInitialClaudeStreamMessage(prompt: string): string {
   );
 }
 
+export function validateCodexAuthJson(content: string): void {
+  validateCodexChatGptAuthJson(content);
+}
+
+export function configureCodexChatGptAuth(
+  agentConfig: AgentContainerConfig,
+  taskId: string,
+  codexAuthJson: string,
+): void {
+  applyCodexChatGptAuthSetup(agentConfig, taskId, codexAuthJson);
+}
+
+export function applyApprovedPlanSetup(
+  agentConfig: AgentContainerConfig,
+  approvedPlanPath: string | undefined,
+  approvedPlanContent: string | undefined,
+): void {
+  const content = approvedPlanContent?.trim();
+  if (!approvedPlanPath || !content) return;
+
+  agentConfig.setupFiles = agentConfig.setupFiles ?? [];
+  const existingIndex = agentConfig.setupFiles.findIndex((file) => file.path === approvedPlanPath);
+  const planFile = { path: approvedPlanPath, content };
+
+  if (existingIndex >= 0) {
+    agentConfig.setupFiles[existingIndex] = planFile;
+    return;
+  }
+
+  agentConfig.setupFiles.push(planFile);
+}
+
+export function hasAgentStartupEvidence(opts: {
+  agentType: string;
+  sessionId: string | undefined;
+  outputEntryCount: number;
+}): boolean {
+  if (opts.sessionId) return true;
+  return opts.agentType === "codex" && opts.outputEntryCount > 0;
+}
+
+function countAgentStartupEvidenceEntries(line: string, entries: AgentLogEntry[]): number {
+  if (line.trim().startsWith("[optio]")) return 0;
+  return entries.length;
+}
+
+function hasCodexTokenFields(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasCodexTokenFields);
+
+  const obj = value as Record<string, unknown>;
+  if (
+    ["access_token", "id_token", "refresh_token"].some(
+      (key) => typeof obj[key] === "string" && (obj[key] as string).length > 0,
+    )
+  ) {
+    return true;
+  }
+
+  return Object.values(obj).some(hasCodexTokenFields);
+}
+
 export function buildAgentCommand(
   agentType: string,
   env: Record<string, string>,
@@ -1746,13 +1893,10 @@ export function buildAgentCommand(
       ];
     }
     case "codex": {
-      const appServerFlag =
-        env.OPTIO_CODEX_AUTH_MODE === "app-server" && env.OPTIO_CODEX_APP_SERVER_URL
-          ? ` --app-server ${JSON.stringify(env.OPTIO_CODEX_APP_SERVER_URL)}`
-          : "";
+      const authLabel = env.OPTIO_CODEX_AUTH_MODE === "chatgpt" ? " (chatgpt)" : "";
       return [
-        `echo "[optio] Running OpenAI Codex${appServerFlag ? " (app-server)" : ""}..."`,
-        `codex exec --full-auto "$OPTIO_PROMPT"${appServerFlag} --json`,
+        `echo "[optio] Running OpenAI Codex${authLabel}..."`,
+        `printf '%s' "$OPTIO_PROMPT" | codex exec --skip-git-repo-check --json --sandbox danger-full-access -`,
       ];
     }
     case "copilot": {
@@ -1829,6 +1973,19 @@ export function shouldEscalateNoPr(opts: {
   if (opts.isPlanningRun) return false;
   if (!opts.hasRepoUrl) return false;
   if (opts.detectedPrUrl) return false;
+  return true;
+}
+
+export function shouldRunPlanningMode(opts: {
+  planningModeEnabled: boolean;
+  resumeSessionId: string | undefined;
+  hasReviewOverride: boolean;
+  approvedPlanPath: string | undefined;
+}): boolean {
+  if (!opts.planningModeEnabled) return false;
+  if (opts.resumeSessionId) return false;
+  if (opts.hasReviewOverride) return false;
+  if (opts.approvedPlanPath) return false;
   return true;
 }
 

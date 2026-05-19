@@ -158,6 +158,22 @@ describe("GET /api/setup/status", () => {
     expect(res.json().steps.anyAgentKey.done).toBe(true);
   });
 
+  it("detects Codex ChatGPT auth.json mode by name when CODEX_AUTH_MODE cannot be decrypted", async () => {
+    mockListSecrets.mockResolvedValue([
+      { name: "GITHUB_TOKEN" },
+      { name: "CODEX_AUTH_MODE" },
+      { name: "CODEX_AUTH_JSON" },
+    ]);
+    mockRetrieveSecret.mockRejectedValue(new Error("decrypt failed: AAD mismatch"));
+    mockCheckRuntimeHealth.mockResolvedValue(true);
+
+    const res = await app.inject({ method: "GET", url: "/api/setup/status" });
+
+    expect(res.json().isSetUp).toBe(true);
+    expect(res.json().steps.codexChatGpt.done).toBe(true);
+    expect(res.json().steps.anyAgentKey.done).toBe(true);
+  });
+
   it("detects Gemini Vertex AI mode by name when GEMINI_AUTH_MODE cannot be decrypted", async () => {
     mockListSecrets.mockResolvedValue([
       { name: "GITHUB_TOKEN" },

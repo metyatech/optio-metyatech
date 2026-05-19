@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_PROMPT_TEMPLATE,
+  PLAN_FILE_PATH,
   renderPromptTemplate,
   renderTaskFile,
   TASK_FILE_PATH,
@@ -162,10 +163,14 @@ describe("PLANNING_MODE in DEFAULT_PROMPT_TEMPLATE", () => {
       AUTO_MERGE: "false",
       ISSUE_NUMBER: "",
       PLANNING_MODE: "true",
+      PLAN_FILE: ".optio/plan.md",
     });
     expect(result).toContain("PLANNING MODE");
     expect(result).toContain("DO NOT create/modify source files");
     expect(result).toContain("implementation plan");
+    expect(result).toContain(".optio/plan.md");
+    expect(result).toContain("MUST only update the planning artifact");
+    expect(result).toContain("Include the same complete plan in your final response");
   });
 
   it("does not include planning mode instructions when PLANNING_MODE is empty", () => {
@@ -239,5 +244,12 @@ describe("TASK_FILE_PATH", () => {
   it("is a relative path", () => {
     expect(TASK_FILE_PATH).not.toMatch(/^\//);
     expect(TASK_FILE_PATH).toContain(".optio/");
+  });
+});
+
+describe("PLAN_FILE_PATH", () => {
+  it("is a relative path", () => {
+    expect(PLAN_FILE_PATH).not.toMatch(/^\//);
+    expect(PLAN_FILE_PATH).toBe(".optio/plan.md");
   });
 });

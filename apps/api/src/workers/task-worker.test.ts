@@ -1,10 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
+import type { AgentContainerConfig } from "@optio/shared";
 import {
+  applyApprovedPlanSetup,
   buildAgentCommand,
   buildInitialClaudeStreamMessage,
+  configureCodexChatGptAuth,
+  hasAgentStartupEvidence,
   inferExitCode,
+  shouldRunPlanningMode,
   shouldEscalateNoPr,
+  validateCodexAuthJson,
 } from "./task-worker.js";
+import { parseCodexEvent } from "../services/codex-event-parser.js";
 
 describe("buildAgentCommand", () => {
   describe("claude-code agent", () => {
@@ -150,41 +157,84 @@ describe("buildAgentCommand", () => {
       const env = { OPTIO_PROMPT: "Build feature" };
       const cmds = buildAgentCommand("codex", env);
       expect(cmds.some((c) => c.includes("codex exec"))).toBe(true);
-      expect(cmds.some((c) => c.includes("--full-auto"))).toBe(true);
+      expect(cmds.some((c) => c.includes("--skip-git-repo-check"))).toBe(true);
       expect(cmds.some((c) => c.includes("--json"))).toBe(true);
+      expect(cmds.some((c) => c.includes("--sandbox danger-full-access"))).toBe(true);
+      expect(cmds.some((c) => c.includes("printf '%s' \"$OPTIO_PROMPT\" |"))).toBe(true);
+      expect(cmds.some((c) => c.endsWith(" -"))).toBe(true);
+      expect(cmds.some((c) => c.includes("--full-auto"))).toBe(false);
     });
 
-    it("does not include --app-server flag in api-key mode", () => {
+    it("does not include --remote flag in api-key mode", () => {
       const env = { OPTIO_PROMPT: "Build feature", OPTIO_CODEX_AUTH_MODE: "api-key" };
       const cmds = buildAgentCommand("codex", env);
-      expect(cmds.some((c) => c.includes("--app-server"))).toBe(false);
+      expect(cmds.some((c) => c.includes("--remote"))).toBe(false);
     });
 
-    it("includes --app-server flag with URL in app-server mode", () => {
+    it("does not include --remote flag in app-server mode", () => {
       const env = {
         OPTIO_PROMPT: "Build feature",
         OPTIO_CODEX_AUTH_MODE: "app-server",
         OPTIO_CODEX_APP_SERVER_URL: "ws://localhost:3900/v1/connect",
       };
       const cmds = buildAgentCommand("codex", env);
-      expect(cmds.some((c) => c.includes("--app-server"))).toBe(true);
-      expect(cmds.some((c) => c.includes("ws://localhost:3900/v1/connect"))).toBe(true);
+      expect(cmds.some((c) => c.includes("--remote"))).toBe(false);
+      expect(cmds.some((c) => c.includes("ws://localhost:3900/v1/connect"))).toBe(false);
     });
 
-    it("includes app-server label in echo when in app-server mode", () => {
+    it("includes chatgpt label in echo when in chatgpt mode", () => {
       const env = {
         OPTIO_PROMPT: "Build feature",
-        OPTIO_CODEX_AUTH_MODE: "app-server",
-        OPTIO_CODEX_APP_SERVER_URL: "ws://localhost:3900/v1/connect",
+        OPTIO_CODEX_AUTH_MODE: "chatgpt",
       };
       const cmds = buildAgentCommand("codex", env);
-      expect(cmds.some((c) => c.includes("(app-server)"))).toBe(true);
+      expect(cmds.some((c) => c.includes("(chatgpt)"))).toBe(true);
+      expect(cmds.some((c) => c.includes("--remote"))).toBe(false);
     });
 
-    it("does not include --app-server flag when auth mode is app-server but URL is missing", () => {
+    it("does not include --remote flag when auth mode is app-server but URL is missing", () => {
       const env = { OPTIO_PROMPT: "Build feature", OPTIO_CODEX_AUTH_MODE: "app-server" };
       const cmds = buildAgentCommand("codex", env);
-      expect(cmds.some((c) => c.includes("--app-server"))).toBe(false);
+      expect(cmds.some((c) => c.includes("--remote"))).toBe(false);
+    });
+  });
+
+  describe("codex ChatGPT auth setup", () => {
+    it("accepts auth_mode chatgpt auth.json", () => {
+      expect(() => validateCodexAuthJson('{"auth_mode":"chatgpt"}')).not.toThrow();
+    });
+
+    it("accepts nested token fields in auth.json", () => {
+      expect(() =>
+        validateCodexAuthJson('{"tokens":{"access_token":"placeholder-token"}}'),
+      ).not.toThrow();
+    });
+
+    it("rejects invalid auth.json without leaking content", () => {
+      expect(() => validateCodexAuthJson('{"not":"codex"}')).toThrow("CODEX_AUTH_JSON must have");
+    });
+
+    it("adds task-scoped CODEX_HOME and sensitive auth.json setup file", () => {
+      const authJson = '{"auth_mode":"chatgpt"}';
+      const config: AgentContainerConfig = {
+        command: [],
+        env: {},
+        requiredSecrets: [],
+        setupFiles: [],
+      };
+
+      configureCodexChatGptAuth(config, "task-123", authJson);
+
+      expect(config.env.CODEX_HOME).toBe("/workspace/tasks/task-123/.codex");
+      expect(config.env.CODEX_AUTH_JSON).toBeUndefined();
+      expect(config.setupFiles).toEqual([
+        {
+          path: "/workspace/tasks/task-123/.codex/auth.json",
+          content: "",
+          contentBase64: Buffer.from(authJson, "utf8").toString("base64"),
+          sensitive: true,
+        },
+      ]);
     });
   });
 
@@ -294,6 +344,59 @@ describe("buildInitialClaudeStreamMessage", () => {
     const line = buildInitialClaudeStreamMessage("");
     const parsed = JSON.parse(line);
     expect(parsed.message.content[0].text).toBe("");
+  });
+});
+
+describe("hasAgentStartupEvidence", () => {
+  it("treats successful Codex usage output without a session id as startup evidence", () => {
+    const parsed = parseCodexEvent(
+      JSON.stringify({
+        usage: { prompt_tokens: 1200, completion_tokens: 300 },
+        total_cost_usd: 0.0123,
+      }),
+      "task-codex-usage",
+    );
+
+    expect(parsed.sessionId).toBeUndefined();
+    expect(parsed.entries).toHaveLength(1);
+    expect(
+      hasAgentStartupEvidence({
+        agentType: "codex",
+        sessionId: parsed.sessionId,
+        outputEntryCount: parsed.entries.length,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat an empty Codex execution as startup evidence", () => {
+    expect(
+      hasAgentStartupEvidence({
+        agentType: "codex",
+        sessionId: undefined,
+        outputEntryCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps successful repo tasks without a PR on the existing escalation path", () => {
+    expect(
+      shouldEscalateNoPr({
+        success: true,
+        isReviewTask: false,
+        isPlanningRun: false,
+        hasRepoUrl: true,
+        detectedPrUrl: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not run planning mode when approved plan path is provided", () => {
+    const env = { OPTIO_PROMPT: "Original task" };
+    buildAgentCommand("claude-code", env, {
+      resumePrompt: "Planning phase is approved. Begin implementation now.",
+    });
+    expect(env.OPTIO_PROMPT).toContain("Begin implementation now");
+    expect(env.OPTIO_PROMPT).toContain("Original task");
   });
 });
 
@@ -407,6 +510,34 @@ describe("inferExitCode", () => {
   });
 });
 
+describe("applyApprovedPlanSetup", () => {
+  it("adds the approved plan setup file", () => {
+    const config: AgentContainerConfig = {
+      command: [],
+      env: {},
+      requiredSecrets: [],
+      setupFiles: [],
+    };
+
+    applyApprovedPlanSetup(config, ".optio/plan.md", "# Plan");
+
+    expect(config.setupFiles).toEqual([{ path: ".optio/plan.md", content: "# Plan" }]);
+  });
+
+  it("updates an existing approved plan setup file instead of duplicating it", () => {
+    const config: AgentContainerConfig = {
+      command: [],
+      env: {},
+      requiredSecrets: [],
+      setupFiles: [{ path: ".optio/plan.md", content: "old" }],
+    };
+
+    applyApprovedPlanSetup(config, ".optio/plan.md", "new");
+
+    expect(config.setupFiles).toEqual([{ path: ".optio/plan.md", content: "new" }]);
+  });
+});
+
 describe("shouldEscalateNoPr", () => {
   const defaults = {
     success: true,
@@ -457,5 +588,34 @@ describe("shouldEscalateNoPr", () => {
         detectedPrUrl: "https://github.com/org/repo/pull/1",
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldRunPlanningMode", () => {
+  const defaults = {
+    planningModeEnabled: true,
+    resumeSessionId: undefined,
+    hasReviewOverride: false,
+    approvedPlanPath: undefined,
+  };
+
+  it("returns true when planning mode is enabled and no guard blocks it", () => {
+    expect(shouldRunPlanningMode(defaults)).toBe(true);
+  });
+
+  it("returns false when planning mode is disabled", () => {
+    expect(shouldRunPlanningMode({ ...defaults, planningModeEnabled: false })).toBe(false);
+  });
+
+  it("returns false when resuming an existing session", () => {
+    expect(shouldRunPlanningMode({ ...defaults, resumeSessionId: "sess-123" })).toBe(false);
+  });
+
+  it("returns false when review override is present", () => {
+    expect(shouldRunPlanningMode({ ...defaults, hasReviewOverride: true })).toBe(false);
+  });
+
+  it("returns false when an approved plan path already exists", () => {
+    expect(shouldRunPlanningMode({ ...defaults, approvedPlanPath: ".optio/plan.md" })).toBe(false);
   });
 });

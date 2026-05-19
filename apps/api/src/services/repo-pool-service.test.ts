@@ -94,6 +94,7 @@ vi.mock("./k8s-workload-service.js", () => ({
 import { db } from "../db/client.js";
 import {
   resolveImage,
+  execTaskInRepoPod,
   getOrCreateRepoPod,
   releaseRepoPodTask,
   cleanupIdleRepoPods,
@@ -250,6 +251,39 @@ describe("resolveImage", () => {
   it("uses local prefix for local dev", () => {
     process.env.OPTIO_AGENT_IMAGE_PREFIX = "optio-";
     expect(resolveImage({ preset: "node" })).toBe("optio-node:latest");
+  });
+});
+
+describe("execTaskInRepoPod setup files", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRuntimeExec.mockResolvedValue({} as any);
+  });
+
+  it("decodes contentBase64 setup files and chmods sensitive files to 0600", async () => {
+    await execTaskInRepoPod(
+      {
+        id: "pod-1",
+        repoUrl: "https://github.com/org/repo",
+        repoBranch: "main",
+        instanceIndex: 0,
+        podName: "optio-repo-pod",
+        podId: "runtime-pod-id",
+        state: "ready",
+        activeTaskCount: 0,
+      },
+      "task-123",
+      [`echo "done"`],
+      {
+        OPTIO_REPO_URL: "https://github.com/org/repo",
+        OPTIO_REPO_BRANCH: "main",
+        OPTIO_SETUP_FILES: "placeholder",
+      },
+    );
+
+    const script = mockRuntimeExec.mock.calls[0]?.[1]?.[2] as string;
+    expect(script).toContain("base64.b64decode");
+    expect(script).toContain("os.chmod(p, 0o600)");
   });
 });
 
