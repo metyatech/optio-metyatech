@@ -10,6 +10,7 @@ import { getRedisClient } from "../services/event-bus.js";
 import { taskQueue } from "../workers/task-worker.js";
 import { ErrorResponseSchema, IdParamsSchema } from "../schemas/common.js";
 import { TaskMessageSchema } from "../schemas/task.js";
+import { buildPlanReviewResumePayload } from "../services/planning-resume-service.js";
 
 // States from which a stopped task can be resumed by sending a chat message.
 // Matches the states accepted by POST /api/tasks/:id/resume and force-restart.
@@ -185,6 +186,15 @@ export async function messageRoutes(rawApp: FastifyInstance) {
         // Stopped + resumable: transition to queued and enqueue a resume run
         // with the user's message as the new prompt. The agent picks up from
         // the stored session id (if any) so context is preserved.
+        const events = await taskService.getTaskEvents(id);
+        const latestTrigger = events[events.length - 1]?.trigger ?? null;
+        const requestedPrompt = content.trim();
+        const resumePayload = buildPlanReviewResumePayload({
+          task,
+          latestTrigger,
+          requestedPrompt,
+        });
+
         await taskService.transitionTask(
           id,
           TaskState.QUEUED,
@@ -195,8 +205,10 @@ export async function messageRoutes(rawApp: FastifyInstance) {
           "process-task",
           {
             taskId: id,
-            resumeSessionId: task.sessionId ?? undefined,
-            resumePrompt: content,
+            resumeSessionId: resumePayload.resumeSessionId,
+            resumePrompt: resumePayload.resumePrompt,
+            approvedPlanPath: resumePayload.approvedPlanPath,
+            approvedPlanContent: resumePayload.approvedPlanContent,
           },
           {
             jobId: `${id}-chat-${Date.now()}`,

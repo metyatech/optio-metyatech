@@ -6,6 +6,7 @@ import * as taskService from "../services/task-service.js";
 import { taskQueue } from "../workers/task-worker.js";
 import { ErrorResponseSchema, IdParamsSchema } from "../schemas/common.js";
 import { TaskSchema } from "../schemas/task.js";
+import { buildPlanReviewResumePayload } from "../services/planning-resume-service.js";
 
 const resumeSchema = z
   .object({
@@ -35,6 +36,14 @@ const TaskResponseSchema = z
     task: TaskSchema.nullable(),
   })
   .describe("Updated task after resume / restart");
+
+const DEFAULT_RESUME_PROMPT = "Continue working on this task.";
+
+async function getLatestTaskEventTrigger(taskId: string): Promise<string | null> {
+  const events = await taskService.getTaskEvents(taskId);
+  if (events.length === 0) return null;
+  return events[events.length - 1]?.trigger ?? null;
+}
 
 export async function resumeRoutes(rawApp: FastifyInstance) {
   const app = rawApp.withTypeProvider<ZodTypeProvider>();
@@ -78,14 +87,24 @@ export async function resumeRoutes(rawApp: FastifyInstance) {
         });
       }
 
+      const requestedPrompt = body.prompt?.trim();
+      const latestTrigger = await getLatestTaskEventTrigger(id);
+      const resumePayload = buildPlanReviewResumePayload({
+        task,
+        latestTrigger,
+        requestedPrompt: requestedPrompt ?? DEFAULT_RESUME_PROMPT,
+      });
+
       await taskService.transitionTask(id, TaskState.QUEUED, "user_resume", body.prompt);
 
       await taskQueue.add(
         "process-task",
         {
           taskId: id,
-          resumeSessionId: task.sessionId,
-          resumePrompt: body.prompt ?? "Continue working on this task.",
+          resumeSessionId: resumePayload.resumeSessionId,
+          resumePrompt: resumePayload.resumePrompt,
+          approvedPlanPath: resumePayload.approvedPlanPath,
+          approvedPlanContent: resumePayload.approvedPlanContent,
         },
         {
           jobId: `${id}-resume-${Date.now()}`,

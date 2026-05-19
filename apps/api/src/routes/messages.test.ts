@@ -6,11 +6,13 @@ import { buildRouteTestApp } from "../test-utils/build-route-test-app.js";
 
 const mockGetTask = vi.fn();
 const mockRecordTaskEvent = vi.fn();
+const mockGetTaskEvents = vi.fn();
 const mockTransitionTask = vi.fn();
 
 vi.mock("../services/task-service.js", () => ({
   getTask: (...args: unknown[]) => mockGetTask(...args),
   recordTaskEvent: (...args: unknown[]) => mockRecordTaskEvent(...args),
+  getTaskEvents: (...args: unknown[]) => mockGetTaskEvents(...args),
   transitionTask: (...args: unknown[]) => mockTransitionTask(...args),
 }));
 
@@ -77,6 +79,7 @@ describe("POST /api/tasks/:id/message", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockGetTaskEvents.mockResolvedValue([]);
     // Mock Redis client for rate limiting
     mockGetRedisClient.mockReturnValue({
       incr: vi.fn().mockResolvedValue(1),
@@ -309,6 +312,97 @@ describe("POST /api/tasks/:id/message", () => {
 
     expect(res.statusCode).toBe(202);
     expect(mockQueueAdd).toHaveBeenCalled();
+  });
+
+  it("keeps planning mode on plan-review feedback via chat resume", async () => {
+    mockGetTask.mockResolvedValue({
+      ...runningClaudeTask,
+      state: "needs_attention",
+      sessionId: "prior-session-xyz",
+      resultSummary: "# Plan",
+    });
+    mockGetTaskEvents.mockResolvedValue([{ trigger: "plan_review" }]);
+    mockCanMessageTask.mockResolvedValue(true);
+    mockSendMessage.mockResolvedValue({
+      id: "msg-plan-feedback",
+      taskId: "task-1",
+      userId: "user-1",
+      content: "Please add rollback strategy",
+      mode: "soft",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      deliveredAt: null,
+      ackedAt: null,
+    });
+    mockTransitionTask.mockResolvedValue(undefined);
+    mockQueueAdd.mockResolvedValue({ id: "job-plan-feedback" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks/task-1/message",
+      payload: { content: "Please add rollback strategy" },
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-task",
+      expect.objectContaining({
+        taskId: "task-1",
+        resumeSessionId: undefined,
+        resumePrompt: expect.stringContaining("You are still in PLANNING MODE"),
+        approvedPlanPath: undefined,
+      }),
+      expect.any(Object),
+    );
+    const payload = mockQueueAdd.mock.calls.at(-1)?.[1] as { resumePrompt: string };
+    expect(payload.resumePrompt).toContain("Current plan content is delimited below");
+    expect(payload.resumePrompt).toContain("<current_plan>");
+    expect(payload.resumePrompt).toContain("<reviewer_feedback>");
+    expect(payload.resumePrompt).toContain("# Plan");
+    expect(payload.resumePrompt).toContain("Please add rollback strategy");
+  });
+
+  it("approving plan via chat switches to implementation with approved plan injected", async () => {
+    mockGetTask.mockResolvedValue({
+      ...runningClaudeTask,
+      state: "needs_attention",
+      sessionId: "prior-session-xyz",
+      resultSummary: "# Plan\n- implement A",
+    });
+    mockGetTaskEvents.mockResolvedValue([{ trigger: "plan_review" }]);
+    mockCanMessageTask.mockResolvedValue(true);
+    mockSendMessage.mockResolvedValue({
+      id: "msg-plan-approve",
+      taskId: "task-1",
+      userId: "user-1",
+      content: "Plan approved. Proceed with implementation.",
+      mode: "soft",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      deliveredAt: null,
+      ackedAt: null,
+    });
+    mockTransitionTask.mockResolvedValue(undefined);
+    mockQueueAdd.mockResolvedValue({ id: "job-plan-approve" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks/task-1/message",
+      payload: { content: "Plan approved. Proceed with implementation." },
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-task",
+      expect.objectContaining({
+        taskId: "task-1",
+        resumeSessionId: "prior-session-xyz",
+        approvedPlanPath: ".optio/plan.md",
+        approvedPlanContent: "# Plan\n- implement A",
+        resumePrompt: expect.stringContaining("Follow the approved plan from .optio/plan.md"),
+      }),
+      expect.any(Object),
+    );
+    const payload = mockQueueAdd.mock.calls.at(-1)?.[1] as { resumePrompt: string };
+    expect(payload.resumePrompt).toContain('<approved_plan path=".optio/plan.md">');
   });
 
   it("returns 429 when rate limit exceeded", async () => {

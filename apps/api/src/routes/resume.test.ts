@@ -6,10 +6,12 @@ import { mockTask } from "../test-utils/fixtures.js";
 // ─── Mocks ───
 
 const mockGetTask = vi.fn();
+const mockGetTaskEvents = vi.fn();
 const mockTransitionTask = vi.fn();
 
 vi.mock("../services/task-service.js", () => ({
   getTask: (...args: unknown[]) => mockGetTask(...args),
+  getTaskEvents: (...args: unknown[]) => mockGetTaskEvents(...args),
   transitionTask: (...args: unknown[]) => mockTransitionTask(...args),
 }));
 
@@ -40,6 +42,7 @@ describe("POST /api/tasks/:id/resume", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockGetTaskEvents.mockResolvedValue([]);
     app = await buildTestApp();
   });
 
@@ -92,6 +95,76 @@ describe("POST /api/tasks/:id/resume", () => {
       expect.objectContaining({ resumePrompt: "Fix the tests" }),
       expect.any(Object),
     );
+  });
+
+  it("keeps planning mode on plan-review feedback (fresh session)", async () => {
+    mockGetTask
+      .mockResolvedValueOnce({
+        ...mockTaskData,
+        state: "needs_attention",
+        resultSummary: "Plan v1",
+      })
+      .mockResolvedValueOnce({ ...mockTaskData, state: "queued" });
+    mockGetTaskEvents.mockResolvedValue([{ trigger: "plan_review" }]);
+    mockTransitionTask.mockResolvedValue(undefined);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks/task-1/resume",
+      payload: { prompt: "Please refine risk section" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-task",
+      expect.objectContaining({
+        taskId: "task-1",
+        resumeSessionId: undefined,
+        resumePrompt: expect.stringContaining("You are still in PLANNING MODE"),
+        approvedPlanPath: undefined,
+      }),
+      expect.any(Object),
+    );
+    const payload = mockQueueAdd.mock.calls.at(-1)?.[1] as { resumePrompt: string };
+    expect(payload.resumePrompt).toContain("Current plan content is delimited below");
+    expect(payload.resumePrompt).toContain("<current_plan>");
+    expect(payload.resumePrompt).toContain("<reviewer_feedback>");
+    expect(payload.resumePrompt).toContain("Plan v1");
+    expect(payload.resumePrompt).toContain("Please refine risk section");
+  });
+
+  it("approving plan switches to implementation prompt with approved plan injected", async () => {
+    mockGetTask
+      .mockResolvedValueOnce({
+        ...mockTaskData,
+        state: "needs_attention",
+        resultSummary: "# Approved Plan\n- Step 1\n- Step 2",
+      })
+      .mockResolvedValueOnce({ ...mockTaskData, state: "queued" });
+    mockGetTaskEvents.mockResolvedValue([{ trigger: "plan_review" }]);
+    mockTransitionTask.mockResolvedValue(undefined);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks/task-1/resume",
+      payload: { prompt: "Plan approved. Proceed with implementation." },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-task",
+      expect.objectContaining({
+        taskId: "task-1",
+        resumeSessionId: "sess-1",
+        approvedPlanPath: ".optio/plan.md",
+        approvedPlanContent: "# Approved Plan\n- Step 1\n- Step 2",
+        resumePrompt: expect.stringContaining("Follow the approved plan from .optio/plan.md"),
+      }),
+      expect.any(Object),
+    );
+    const queuedPayload = mockQueueAdd.mock.calls.at(-1)?.[1] as { resumePrompt: string };
+    expect(queuedPayload.resumePrompt).toContain('<approved_plan path=".optio/plan.md">');
+    expect(queuedPayload.resumePrompt).toContain("# Approved Plan");
   });
 
   it("returns 404 for nonexistent task", async () => {
