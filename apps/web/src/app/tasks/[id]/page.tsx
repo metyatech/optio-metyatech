@@ -15,7 +15,7 @@ import { StateBadge } from "@/components/state-badge";
 import { TokenRefreshBanner } from "@/components/token-refresh-banner";
 import { api } from "@/lib/api-client";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { classifyError } from "@optio/shared";
+import { classifyError, PLAN_APPROVE_PROMPT } from "@optio/shared";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   Loader2,
@@ -39,6 +39,7 @@ import {
 import { toast } from "sonner";
 import { useOptioChatStore } from "@/hooks/use-optio-chat";
 import { AddDependencyDialog } from "@/components/add-dependency-dialog";
+import { getTaskComposerMode } from "./composer-mode";
 
 export default function TaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -189,10 +190,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
   const handleApprovePlan = async () => {
     setActionLoading(true);
     try {
-      await api.resumeTask(
-        id,
-        "Plan approved. Proceed with implementation following your plan above.",
-      );
+      await api.resumeTask(id, PLAN_APPROVE_PROMPT);
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to approve plan");
@@ -274,6 +272,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
     task.state === "needs_attention" &&
     events.length > 0 &&
     events[events.length - 1]?.trigger === "plan_review";
+  const composerMode = getTaskComposerMode({ isPlanReview, canResume, canMessage });
 
   // (log filtering is handled by LogViewer component)
 
@@ -864,26 +863,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
 
           {/* Message / Resume bar */}
           <div className="shrink-0 border-t border-border bg-bg-card px-4 py-2.5">
-            {canMessage ? (
-              /* Unified chat bar. For running claude-code tasks the message is
-                 delivered mid-turn via stream-json stdin; for stopped tasks
-                 (needs_attention / pr_opened / failed / cancelled) it resumes
-                 the agent with the message as the new prompt. */
-              <ChatComposer
-                value={messageInput}
-                onChange={setMessageInput}
-                onSend={() => handleSendMessage("soft")}
-                onInterrupt={canMessageRunning ? () => handleSendMessage("interrupt") : undefined}
-                sending={messageSending}
-                placeholder={
-                  canMessageRunning
-                    ? "Send a message to the running agent..."
-                    : "Resume the agent with a message..."
-                }
-                sendLabel={canMessageRunning ? "Send" : "Resume"}
-                interruptLabel="Stop"
-              />
-            ) : isPlanReview && canResume ? (
+            {composerMode === "plan_review" ? (
               /* Plan review bar */
               <div className="space-y-2">
                 <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/20 text-sm">
@@ -924,6 +904,25 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                   </button>
                 </div>
               </div>
+            ) : composerMode === "message" ? (
+              /* Unified chat bar. For running claude-code tasks the message is
+                 delivered mid-turn via stream-json stdin; for stopped tasks
+                 (needs_attention / pr_opened / failed / cancelled) it resumes
+                 the agent with the message as the new prompt. */
+              <ChatComposer
+                value={messageInput}
+                onChange={setMessageInput}
+                onSend={() => handleSendMessage("soft")}
+                onInterrupt={canMessageRunning ? () => handleSendMessage("interrupt") : undefined}
+                sending={messageSending}
+                placeholder={
+                  canMessageRunning
+                    ? "Send a message to the running agent..."
+                    : "Resume the agent with a message..."
+                }
+                sendLabel={canMessageRunning ? "Send" : "Resume"}
+                interruptLabel="Stop"
+              />
             ) : (
               /* Resume bar (for non-running or resumable tasks) */
               <div className="flex gap-2 items-center">

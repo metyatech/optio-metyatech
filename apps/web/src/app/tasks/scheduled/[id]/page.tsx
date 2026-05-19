@@ -33,6 +33,7 @@ interface TaskConfig {
   repoUrl: string;
   repoBranch: string;
   agentType: string | null;
+  planningModeEnabled: boolean;
   maxRetries: number;
   priority: number;
   enabled: boolean;
@@ -147,6 +148,7 @@ function ScheduledTaskDetailInner({ id }: { id: string }) {
         repoUrl: form.repoUrl,
         repoBranch: form.repoBranch,
         agentType: form.agentType,
+        planningModeEnabled: form.planningModeEnabled,
         maxRetries: form.maxRetries,
         priority: form.priority,
       });
@@ -386,6 +388,20 @@ function ScheduledTaskDetailInner({ id }: { id: string }) {
               className="w-full px-3 py-2 rounded-lg bg-bg-card border border-border text-sm"
             />
           </Field>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.planningModeEnabled}
+              onChange={(e) => setForm({ ...form, planningModeEnabled: e.target.checked })}
+              className="w-4 h-4 rounded"
+            />
+            <div>
+              <span className="text-sm">Planning Mode</span>
+              <p className="text-[10px] text-text-muted/60 mt-0.5">
+                New runs from this scheduled task will require plan approval before coding.
+              </p>
+            </div>
+          </label>
           <Field label="Prompt">
             <textarea
               rows={8}

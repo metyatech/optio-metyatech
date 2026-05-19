@@ -81,7 +81,6 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
   const [maxTurnsCoding, setMaxTurnsCoding] = useState(250);
   const [maxTurnsReview, setMaxTurnsReview] = useState(30);
   const [autoResume, setAutoResume] = useState(false);
-  const [planningModeEnabled, setPlanningModeEnabled] = useState(false);
   const [maxConcurrentTasks, setMaxConcurrentTasks] = useState(2);
   const [maxPodInstances, setMaxPodInstances] = useState(1);
   const [maxAgentsPerPod, setMaxAgentsPerPod] = useState(2);
@@ -153,7 +152,6 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
         setDefaultAgentType(r.defaultAgentType ?? "claude-code");
         setActiveAgentTab(r.defaultAgentType ?? "claude-code");
         setAutoResume(r.autoResume ?? false);
-        setPlanningModeEnabled(r.planningModeEnabled ?? false);
         setMaxConcurrentTasks(r.maxConcurrentTasks ?? 2);
         setMaxPodInstances(r.maxPodInstances ?? 1);
         setMaxAgentsPerPod(r.maxAgentsPerPod ?? 2);
@@ -248,7 +246,6 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
         cautiousMode,
         defaultAgentType,
         autoResume,
-        planningModeEnabled,
         maxConcurrentTasks,
         maxPodInstances,
         maxAgentsPerPod,
@@ -716,24 +713,6 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
               <p className="text-xs text-text-muted">
                 Opens draft PRs and disables auto-merge. A human must mark PRs ready and merge them
                 manually.
-              </p>
-            </div>
-          </label>
-        </div>
-
-        {/* Planning Mode */}
-        <div className="flex items-center gap-3 p-3 rounded-lg border border-border/50 bg-bg mb-4">
-          <label className="flex items-center gap-2 cursor-pointer flex-1">
-            <input
-              type="checkbox"
-              checked={planningModeEnabled}
-              onChange={(e) => setPlanningModeEnabled(e.target.checked)}
-              className="w-4 h-4 rounded"
-            />
-            <div>
-              <span className="text-sm font-medium">Planning Mode</span>
-              <p className="text-xs text-text-muted">
-                Agent creates an implementation plan and waits for approval before coding
               </p>
             </div>
           </label>

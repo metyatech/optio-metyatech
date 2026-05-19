@@ -53,6 +53,7 @@ export default function NewTaskPage() {
     description: "",
     selectedRepos: [] as Array<{ id: string; url: string; branch: string }>,
     agentType: "claude-code",
+    planningModeEnabled: false,
     priority: 100,
     maxRetries: 3,
   });
@@ -169,6 +170,7 @@ export default function NewTaskPage() {
         repoUrl: mode === "repo" ? form.selectedRepos[0]?.url : undefined,
         repoBranch: mode === "repo" ? form.selectedRepos[0]?.branch : undefined,
         priority: mode === "repo" ? form.priority : undefined,
+        planningModeEnabled: mode === "repo" ? form.planningModeEnabled : undefined,
         ...(selectedDeps.length > 0 && apiType === "repo-task" ? { dependsOn: selectedDeps } : {}),
         enabled: true,
       });
@@ -570,6 +572,20 @@ export default function NewTaskPage() {
         {/* Priority (repo tasks) */}
         {mode === "repo" && (
           <div>
+            <label className="flex items-center gap-2 cursor-pointer mb-4">
+              <input
+                type="checkbox"
+                checked={form.planningModeEnabled}
+                onChange={(e) => setForm((f) => ({ ...f, planningModeEnabled: e.target.checked }))}
+                className="w-4 h-4 rounded"
+              />
+              <div>
+                <span className="text-sm">Planning Mode</span>
+                <p className="text-xs text-text-muted/60">
+                  Agent creates a plan first and waits for approval before coding.
+                </p>
+              </div>
+            </label>
             <label className="block text-sm text-text-muted mb-1.5">Priority</label>
             <p className="text-xs text-text-muted/60 mb-1.5">
               Lower number = higher priority. Default 100.
