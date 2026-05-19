@@ -122,6 +122,7 @@ const createTaskSchema = z
       .optional()
       .describe("Array of repositories for this task"),
     priority: z.number().int().min(1).max(1000).optional(),
+    planningModeEnabled: z.boolean().optional(),
     // Repo-task-only fields
     ticketSource: z.string().optional(),
     ticketExternalId: z.string().optional(),
@@ -488,6 +489,7 @@ export async function taskRoutes(rawApp: FastifyInstance) {
             repoUrl: input.repoUrl,
             repoBranch: input.repoBranch ?? "main",
             agentType: input.agentType ?? null,
+            planningModeEnabled: input.planningModeEnabled ?? false,
             maxRetries: input.maxRetries ?? 3,
             priority: input.priority ?? 100,
             enabled: input.enabled ?? true,
@@ -550,6 +552,7 @@ export async function taskRoutes(rawApp: FastifyInstance) {
         metadata: taskInput.metadata,
         maxRetries: taskInput.maxRetries,
         priority: taskInput.priority,
+        planningModeEnabled: taskInput.planningModeEnabled ?? false,
         createdBy: req.user?.id,
         workspaceId: req.user?.workspaceId ?? null,
       });

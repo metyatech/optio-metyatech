@@ -49,6 +49,7 @@ export async function createTask(input: CreateTaskInput & { workspaceId?: string
       metadata: input.metadata,
       maxRetries: input.maxRetries ?? 3,
       priority: input.priority ?? 100,
+      planningModeEnabled: input.planningModeEnabled ?? false,
       createdBy: input.createdBy ?? undefined,
       workspaceId: input.workspaceId ?? undefined,
     })

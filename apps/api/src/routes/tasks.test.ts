@@ -95,14 +95,20 @@ vi.mock("../services/workflow-service.js", () => ({
   createWorkflowRun: vi.fn(),
 }));
 
+const mockCreateTaskConfig = vi.fn();
+const mockGetTaskConfig = vi.fn();
+const mockInstantiateTask = vi.fn();
+const mockCreateTaskConfigTrigger = vi.fn();
+const mockUpdateTaskConfigTrigger = vi.fn();
+const mockDeleteTaskConfigTrigger = vi.fn();
 vi.mock("../services/task-config-service.js", () => ({
-  createTaskConfig: vi.fn(),
-  getTaskConfig: vi.fn(),
+  createTaskConfig: (...args: unknown[]) => mockCreateTaskConfig(...args),
+  getTaskConfig: (...args: unknown[]) => mockGetTaskConfig(...args),
   listTaskConfigs: vi.fn().mockResolvedValue([]),
-  instantiateTask: vi.fn(),
-  createTaskConfigTrigger: vi.fn(),
-  updateTaskConfigTrigger: vi.fn(),
-  deleteTaskConfigTrigger: vi.fn(),
+  instantiateTask: (...args: unknown[]) => mockInstantiateTask(...args),
+  createTaskConfigTrigger: (...args: unknown[]) => mockCreateTaskConfigTrigger(...args),
+  updateTaskConfigTrigger: (...args: unknown[]) => mockUpdateTaskConfigTrigger(...args),
+  deleteTaskConfigTrigger: (...args: unknown[]) => mockDeleteTaskConfigTrigger(...args),
 }));
 
 import { taskRoutes } from "./tasks.js";
@@ -144,6 +150,7 @@ const mockTaskData = {
   metadata: null,
   retryCount: 0,
   maxRetries: 1,
+  planningModeEnabled: false,
   priority: 100,
   parentTaskId: null,
   taskType: "coding",
@@ -286,6 +293,7 @@ describe("POST /api/tasks", () => {
         prompt: "Fix the bug",
         repoUrl: "https://github.com/org/repo",
         agentType: "claude-code",
+        planningModeEnabled: true,
       },
     });
 
@@ -297,6 +305,7 @@ describe("POST /api/tasks", () => {
         repoUrl: "https://github.com/org/repo",
         agentType: "claude-code",
         workspaceId: "ws-1",
+        planningModeEnabled: true,
       }),
     );
     expect(mockTransitionTask).toHaveBeenCalled();
@@ -396,6 +405,49 @@ describe("POST /api/tasks", () => {
     });
 
     expect(res.statusCode).toBe(201);
+  });
+
+  it("defaults planningModeEnabled=false when omitted", async () => {
+    mockCreateTask.mockResolvedValue({ ...mockTaskData, id: "new-task" });
+    mockTransitionTask.mockResolvedValue(undefined);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      payload: {
+        title: "Fix bug",
+        prompt: "Fix the bug",
+        repoUrl: "https://github.com/org/repo",
+        agentType: "claude-code",
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(mockCreateTask).toHaveBeenCalledWith(
+      expect.objectContaining({ planningModeEnabled: false }),
+    );
+  });
+
+  it("creates a repo-blueprint with planning mode enabled", async () => {
+    mockCreateTaskConfig.mockResolvedValue({ id: "cfg-1", name: "Planned schedule" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      payload: {
+        type: "repo-blueprint",
+        name: "Planned schedule",
+        title: "Planned schedule",
+        prompt: "Plan then implement",
+        repoUrl: "https://github.com/org/repo",
+        planningModeEnabled: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(mockCreateTaskConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ planningModeEnabled: true }),
+    );
   });
 });
 

@@ -122,6 +122,26 @@ describe("POST /api/tasks/:id/runs", () => {
     expect(mockInstantiateTask).toHaveBeenCalledWith("tc-1", expect.any(Object));
   });
 
+  it("passes params through repo-blueprint instantiation", async () => {
+    mockResolveAnyTaskById.mockResolvedValue({
+      type: "repo-blueprint",
+      data: { id: "tc-1" },
+    });
+    mockInstantiateTask.mockResolvedValue({ id: "task-new" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks/tc-1/runs",
+      payload: { params: { target: "prod" } },
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(mockInstantiateTask).toHaveBeenCalledWith(
+      "tc-1",
+      expect.objectContaining({ params: { target: "prod" } }),
+    );
+  });
+
   it("creates a workflow_run for a standalone parent", async () => {
     mockResolveAnyTaskById.mockResolvedValue({
       type: "standalone",

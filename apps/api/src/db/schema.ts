@@ -128,6 +128,7 @@ export const tasks = pgTable(
     lastPodId: uuid("last_pod_id"), // last pod this task ran on (for same-pod retry affinity)
     workflowRunId: uuid("workflow_run_id"), // nullable FK to workflow_runs
     createdBy: uuid("created_by"), // nullable FK to users (null when auth is disabled)
+    planningModeEnabled: boolean("planning_mode_enabled").notNull().default(false),
     ignoreOffPeak: boolean("ignore_off_peak").notNull().default(false),
     lastActivityAt: timestamp("last_activity_at", { withTimezone: true }), // stall detection: last parsed agent event
     activitySubstate: taskActivitySubstateEnum("activity_substate").notNull().default("active"),
@@ -605,6 +606,7 @@ export const taskConfigs = pgTable(
     repoUrl: text("repo_url").notNull(),
     repoBranch: text("repo_branch").notNull().default("main"),
     agentType: text("agent_type"),
+    planningModeEnabled: boolean("planning_mode_enabled").notNull().default(false),
     maxRetries: integer("max_retries").notNull().default(3),
     priority: integer("priority").notNull().default(100),
     enabled: boolean("enabled").notNull().default(true),

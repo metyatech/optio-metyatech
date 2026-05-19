@@ -111,6 +111,9 @@ export const TaskSchema = z
       .describe("Arbitrary JSON metadata passed through to the agent"),
     retryCount: z.number().int().describe("Number of retries attempted"),
     maxRetries: z.number().int().describe("Maximum retries allowed"),
+    planningModeEnabled: z
+      .boolean()
+      .describe("When true, task enters planning mode before implementation"),
     priority: z.number().int().describe("Priority — lower numbers run first"),
     parentTaskId: z.string().nullable().describe("Parent task ID when this is a subtask"),
     taskType: z.string().optional().describe("`coding` | `review` | `step` | `child`"),

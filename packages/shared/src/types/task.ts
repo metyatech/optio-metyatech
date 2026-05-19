@@ -30,6 +30,7 @@ export interface Task {
   metadata?: Record<string, unknown>;
   retryCount: number;
   maxRetries: number;
+  planningModeEnabled: boolean;
   lastActivityAt?: Date;
   activitySubstate?: TaskActivitySubstate;
   createdAt: Date;
@@ -102,6 +103,7 @@ export interface CreateTaskInput {
   metadata?: Record<string, unknown>;
   maxRetries?: number;
   priority?: number;
+  planningModeEnabled?: boolean;
   dependsOn?: string[];
   createdBy?: string;
 }

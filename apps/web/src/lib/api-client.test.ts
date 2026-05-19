@@ -72,6 +72,60 @@ describe("api-client", () => {
       const body = JSON.parse(opts.body);
       expect(body.title).toBe("New Task");
     });
+
+    it("includes planningModeEnabled in repo task payload when provided", async () => {
+      mockResponse({ task: { id: "new-2" } });
+      await api.createTask({
+        title: "Planned Task",
+        prompt: "Create plan first",
+        repoUrl: "https://github.com/test/repo",
+        agentType: "claude-code",
+        planningModeEnabled: true,
+      });
+
+      const [, opts] = fetchMock.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.planningModeEnabled).toBe(true);
+    });
+  });
+
+  describe("createTaskConfig", () => {
+    it("includes planningModeEnabled in scheduled config payload", async () => {
+      mockResponse({ taskConfig: { id: "cfg-1" } });
+
+      await api.createTaskConfig({
+        name: "Nightly planned",
+        title: "Nightly task",
+        prompt: "Do work",
+        repoUrl: "https://github.com/test/repo",
+        planningModeEnabled: true,
+      });
+
+      const [url, opts] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/task-configs");
+      const body = JSON.parse(opts.body);
+      expect(body.planningModeEnabled).toBe(true);
+    });
+  });
+
+  describe("createTaskUnified", () => {
+    it("includes planningModeEnabled in repo-blueprint payload when provided", async () => {
+      mockResponse({ task: { id: "cfg-2" } });
+
+      await api.createTaskUnified({
+        type: "repo-blueprint",
+        name: "Planned schedule",
+        title: "Planned schedule",
+        prompt: "Do work",
+        repoUrl: "https://github.com/test/repo",
+        planningModeEnabled: true,
+      });
+
+      const [url, opts] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/tasks");
+      const body = JSON.parse(opts.body);
+      expect(body.planningModeEnabled).toBe(true);
+    });
   });
 
   describe("cancelTask", () => {

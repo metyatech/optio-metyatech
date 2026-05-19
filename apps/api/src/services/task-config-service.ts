@@ -15,6 +15,7 @@ export interface CreateTaskConfigInput {
   repoUrl: string;
   repoBranch?: string;
   agentType?: string | null;
+  planningModeEnabled?: boolean;
   maxRetries?: number;
   priority?: number;
   enabled?: boolean;
@@ -31,6 +32,7 @@ export interface UpdateTaskConfigInput {
   repoUrl?: string;
   repoBranch?: string;
   agentType?: string | null;
+  planningModeEnabled?: boolean;
   maxRetries?: number;
   priority?: number;
   enabled?: boolean;
@@ -48,6 +50,7 @@ export async function createTaskConfig(input: CreateTaskConfigInput) {
       repoUrl: input.repoUrl,
       repoBranch: input.repoBranch ?? "main",
       agentType: input.agentType ?? null,
+      planningModeEnabled: input.planningModeEnabled ?? false,
       maxRetries: input.maxRetries ?? 3,
       priority: input.priority ?? 100,
       enabled: input.enabled ?? true,
@@ -107,6 +110,8 @@ export async function updateTaskConfig(id: string, input: UpdateTaskConfigInput)
   if (input.repoUrl !== undefined) updates.repoUrl = input.repoUrl;
   if (input.repoBranch !== undefined) updates.repoBranch = input.repoBranch;
   if (input.agentType !== undefined) updates.agentType = input.agentType;
+  if (input.planningModeEnabled !== undefined)
+    updates.planningModeEnabled = input.planningModeEnabled;
   if (input.maxRetries !== undefined) updates.maxRetries = input.maxRetries;
   if (input.priority !== undefined) updates.priority = input.priority;
   if (input.enabled !== undefined) updates.enabled = input.enabled;
@@ -165,6 +170,7 @@ export async function instantiateTask(
     repoUrl: config.repoUrl,
     repoBranch: config.repoBranch,
     agentType,
+    planningModeEnabled: config.planningModeEnabled,
     maxRetries: config.maxRetries,
     priority: config.priority,
     createdBy: config.createdBy ?? undefined,

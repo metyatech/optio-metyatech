@@ -41,6 +41,7 @@ export const mockTask = {
   metadata: null,
   retryCount: 0,
   maxRetries: 3,
+  planningModeEnabled: false,
   priority: 100,
   parentTaskId: null,
   taskType: "coding",

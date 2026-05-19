@@ -106,6 +106,7 @@ export const api = {
     metadata?: Record<string, unknown>;
     maxRetries?: number;
     priority?: number;
+    planningModeEnabled?: boolean;
     dependsOn?: string[];
   }) =>
     request<{ task: any }>("/api/tasks", {
@@ -1504,6 +1505,7 @@ export const api = {
     ticketExternalId?: string;
     metadata?: Record<string, unknown>;
     dependsOn?: string[];
+    planningModeEnabled?: boolean;
     enabled?: boolean;
   }) =>
     request<{ task: any }>("/api/tasks", {
@@ -1586,6 +1588,7 @@ export const api = {
     repoUrl: string;
     repoBranch?: string;
     agentType?: string;
+    planningModeEnabled?: boolean;
     maxRetries?: number;
     priority?: number;
     enabled?: boolean;
@@ -1606,6 +1609,7 @@ export const api = {
       repoUrl: string;
       repoBranch: string;
       agentType: string | null;
+      planningModeEnabled: boolean;
       maxRetries: number;
       priority: number;
       enabled: boolean;
