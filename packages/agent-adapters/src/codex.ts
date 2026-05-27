@@ -9,16 +9,17 @@ import type { AgentAdapter } from "./types.js";
 
 /**
  * Codex CLI (codex exec --json) outputs NDJSON events.
- * Each line is a JSON object. Known event shapes:
+ * Each line is a JSON object. Known event shapes vary by CLI version:
  *
  * - { type: "message", role: "assistant"|"system", content: "..." }
  * - { type: "function_call", name: "shell"|"...", call_id: "...", arguments: "..." }
  * - { type: "function_call_output", call_id: "...", output: "..." }
+ * - { type: "response.output_text.done", text: "..." }
+ * - { type: "response.output_item.done", item: { type: "message", ... } }
+ * - { type: "response.completed", response: { output: [...] } }
  * - { type: "error", message: "..." }
  * - { error: { message: "...", type: "...", code: "..." } }  (OpenAI API error envelope)
  * - { type: "usage", ... } or inline usage in final message
- *
- * The final summary event may contain usage data with input_tokens / output_tokens.
  */
 
 /** Known Codex-compatible model pricing (USD per 1M tokens) */
@@ -33,6 +34,7 @@ const CODEX_MODEL_PRICING: Record<string, { input: number; output: number; cache
   };
 
 const DEFAULT_PRICING = CODEX_MODEL_PRICING["codex-mini"];
+const MAX_SUMMARY_CHARS = 20_000;
 
 export class CodexAdapter implements AgentAdapter {
   readonly type = "codex";
@@ -150,8 +152,9 @@ export class CodexAdapter implements AgentAdapter {
       }
 
       // Extract model name
-      if (event.model && !model) {
-        model = event.model;
+      const eventModel = event.model ?? event.response?.model;
+      if (eventModel && !model) {
+        model = eventModel;
       }
 
       // OpenAI structured API error envelope: { error: { message, type, code } }
@@ -168,11 +171,12 @@ export class CodexAdapter implements AgentAdapter {
         continue;
       }
 
-      // Track assistant messages for summary
-      if (event.type === "message" && event.role === "assistant" && event.content) {
-        if (typeof event.content === "string") {
-          lastAssistantMessage = event.content;
-        }
+      // Track assistant messages for summary. Planning mode uses resultSummary
+      // as the approved-plan handoff, so keep substantially more than a short
+      // card preview here.
+      const assistantMessage = extractAssistantText(event);
+      if (assistantMessage.trim()) {
+        lastAssistantMessage = assistantMessage;
       }
 
       // Extract usage data — may appear in multiple places
@@ -194,8 +198,9 @@ export class CodexAdapter implements AgentAdapter {
 
       // Capture direct cost without returning early — subsequent lines may
       // contain error events or additional messages that we still need to parse.
-      if (event.total_cost_usd != null) {
-        directCost = event.total_cost_usd;
+      const cost = event.total_cost_usd ?? event.response?.total_cost_usd;
+      if (cost != null) {
+        directCost = Number(cost);
       }
     }
 
@@ -216,7 +221,7 @@ export class CodexAdapter implements AgentAdapter {
       costUsd,
       errorMessage,
       hasError,
-      summary: lastAssistantMessage ? truncate(lastAssistantMessage, 200) : undefined,
+      summary: lastAssistantMessage ? truncate(lastAssistantMessage, MAX_SUMMARY_CHARS) : undefined,
     };
   }
 
@@ -235,6 +240,49 @@ export class CodexAdapter implements AgentAdapter {
     }
     return parts.join("\n");
   }
+}
+
+function extractAssistantText(event: any): string {
+  if (event.type === "message" && event.role === "assistant") {
+    return extractText(event.content);
+  }
+
+  const payload = event.item ?? event.message;
+  if (payload?.type === "message" && payload.role === "assistant") {
+    return extractText(payload.content ?? payload.text);
+  }
+
+  if (event.type === "response.output_text.done" || event.type === "response.output_text.delta") {
+    return extractText(event.text ?? event.delta ?? event.content);
+  }
+
+  return extractText(event.response?.output ?? event.output);
+}
+
+function extractText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(extractText).filter(Boolean).join("\n");
+  if (typeof value !== "object") return "";
+
+  const obj = value as Record<string, unknown>;
+  const type = typeof obj.type === "string" ? obj.type : "";
+
+  if (type === "text" || type === "output_text" || type === "summary_text" || type === "input_text") {
+    return extractText(obj.text ?? obj.content);
+  }
+  if (type === "message") return extractText(obj.content ?? obj.text);
+  if (type.includes("function_call") || type.includes("tool_call") || type === "reasoning") return "";
+
+  for (const key of ["text", "output_text", "content", "message", "result", "delta"]) {
+    if (key in obj) {
+      const text = extractText(obj[key]);
+      if (text) return text;
+    }
+  }
+
+  return "";
 }
 
 function truncate(s: string, maxLen: number): string {
