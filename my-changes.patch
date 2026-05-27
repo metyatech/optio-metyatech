@@ -1,0 +1,217 @@
+diff --git a/apps/api/src/services/codex-event-parser.ts b/apps/api/src/services/codex-event-parser.ts
+index 7221917..a8de539 100644
+--- a/apps/api/src/services/codex-event-parser.ts
++++ b/apps/api/src/services/codex-event-parser.ts
+@@ -37,7 +37,8 @@ export function parseCodexEvent(
+   }
+ 
+   if (eventType === "error" || payloadType === "error") {
+-    const msg = event.message ?? event.error ?? payload?.message ?? payload?.error ?? JSON.stringify(event);
++    const msg =
++      event.message ?? event.error ?? payload?.message ?? payload?.error ?? JSON.stringify(event);
+     entries.push(makeEntry(taskId, timestamp, sessionId, "error", stringifyValue(msg)));
+     return { entries, sessionId };
+   }
+@@ -56,9 +57,10 @@ export function parseCodexEvent(
+         toolUseId: commandExecution.id,
+       },
+     });
+-    const trimmed = commandExecution.output.length > 300
+-      ? commandExecution.output.slice(0, 300) + "…"
+-      : commandExecution.output;
++    const trimmed =
++      commandExecution.output.length > 300
++        ? commandExecution.output.slice(0, 300) + "…"
++        : commandExecution.output;
+     if (trimmed.trim()) {
+       entries.push({
+         taskId,
+@@ -95,7 +97,8 @@ export function parseCodexEvent(
+ 
+   const toolResult = parseToolResult(event, payload);
+   if (toolResult) {
+-    const trimmed = toolResult.output.length > 300 ? toolResult.output.slice(0, 300) + "…" : toolResult.output;
++    const trimmed =
++      toolResult.output.length > 300 ? toolResult.output.slice(0, 300) + "…" : toolResult.output;
+     if (trimmed.trim()) {
+       entries.push({
+         taskId,
+@@ -113,7 +116,13 @@ export function parseCodexEvent(
+   if (message) {
+     if (message.content.trim()) {
+       entries.push(
+-        makeEntry(taskId, timestamp, sessionId, message.role === "system" ? "system" : "text", message.content),
++        makeEntry(
++          taskId,
++          timestamp,
++          sessionId,
++          message.role === "system" ? "system" : "text",
++          message.content,
++        ),
+       );
+     }
+     addUsageEntry(entries, taskId, timestamp, sessionId, event);
+@@ -189,14 +198,12 @@ function makeEntry(
+ }
+ 
+ function getSessionId(event: any): string | undefined {
+-  return (
+-    event.session_id ??
++  return (event.session_id ??
+     event.conversation_id ??
+     event.thread_id ??
+     event.response?.id ??
+     event.item?.id ??
+-    event.id
+-  ) as string | undefined;
++    event.id) as string | undefined;
+ }
+ 
+ function getPayload(event: any): any {
+@@ -211,7 +218,10 @@ function parseMessage(event: any, payload: any): { role: string; content: string
+     return { role: payload.role, content: extractText(payload.content ?? payload.text) };
+   }
+   if (payload?.type === "agent_message") {
+-    return { role: "assistant", content: extractText(payload.text ?? payload.content ?? payload.message) };
++    return {
++      role: "assistant",
++      content: extractText(payload.text ?? payload.content ?? payload.message),
++    };
+   }
+   if (event.type === "response.output_item.done" && payload?.role) {
+     return { role: payload.role, content: extractText(payload.content ?? payload.text) };
+@@ -223,7 +233,15 @@ function parseReasoning(event: any, payload: any): string {
+   const eventType = typeof event.type === "string" ? event.type : "";
+   const payloadType = typeof payload?.type === "string" ? payload.type : "";
+   if (eventType.includes("reasoning") || payloadType === "reasoning") {
+-    return extractText(payload?.summary ?? payload?.content ?? payload?.text ?? event.summary ?? event.content ?? event.text ?? event.delta);
++    return extractText(
++      payload?.summary ??
++        payload?.content ??
++        payload?.text ??
++        event.summary ??
++        event.content ??
++        event.text ??
++        event.delta,
++    );
+   }
+   return "";
+ }
+@@ -265,8 +283,10 @@ function parseToolUse(
+   payload: any,
+ ): { name: string; args?: Record<string, unknown>; id?: string } | null {
+   const payloadType = typeof payload?.type === "string" ? payload.type : "";
+-  const source = payloadType.includes("function_call") || payloadType.includes("tool_call") ? payload : event;
++  const source =
++    payloadType.includes("function_call") || payloadType.includes("tool_call") ? payload : event;
+   const sourceType = typeof source?.type === "string" ? source.type : "";
++  if (sourceType.includes("output") || sourceType.includes("result")) return null;
+   if (!sourceType.includes("function_call") && !sourceType.includes("tool_call")) return null;
+ 
+   const name = source.name ?? source.function?.name ?? source.tool_name ?? "tool";
+@@ -280,7 +300,10 @@ function parseToolUse(
+ function parseToolResult(event: any, payload: any): { output: string; id?: string } | null {
+   const eventType = typeof event.type === "string" ? event.type : "";
+   const payloadType = typeof payload?.type === "string" ? payload.type : "";
+-  if (!eventType.includes("function_call_output") && !payloadType.includes("function_call_output")) {
++  if (
++    !eventType.includes("function_call_output") &&
++    !payloadType.includes("function_call_output")
++  ) {
+     return null;
+   }
+   const source = payloadType.includes("function_call_output") ? payload : event;
+@@ -307,7 +330,9 @@ function addUsageEntry(
+   if (outputTokens) meta.push(`${outputTokens} output tokens`);
+   if (cost) meta.push(`$${Number(cost).toFixed(4)}`);
+   if (!meta.length) return;
+-  const alreadyRecorded = entries.some((entry) => entry.type === "info" && entry.content.startsWith("Usage:"));
++  const alreadyRecorded = entries.some(
++    (entry) => entry.type === "info" && entry.content.startsWith("Usage:"),
++  );
+   if (alreadyRecorded) return;
+   entries.push({
+     taskId,
+@@ -329,7 +354,12 @@ function extractText(value: unknown): string {
+   const obj = value as Record<string, unknown>;
+   const type = typeof obj.type === "string" ? obj.type : "";
+ 
+-  if (type === "text" || type === "output_text" || type === "summary_text" || type === "input_text") {
++  if (
++    type === "text" ||
++    type === "output_text" ||
++    type === "summary_text" ||
++    type === "input_text"
++  ) {
+     return extractText(obj.text ?? obj.content);
+   }
+   if (type === "message") return extractText(obj.content ?? obj.text);
+@@ -337,7 +367,8 @@ function extractText(value: unknown): string {
+   if (type === "reasoning") return extractText(obj.summary ?? obj.content ?? obj.text);
+ 
+   // Do not treat tool-call argument JSON as natural-language output.
+-  if (type.includes("function_call") || type.includes("tool_call") || type === "command_execution") return "";
++  if (type.includes("function_call") || type.includes("tool_call") || type === "command_execution")
++    return "";
+ 
+   for (const key of ["text", "output_text", "content", "message", "summary", "result", "delta"]) {
+     if (key in obj) {
+@@ -405,7 +436,10 @@ function stringifyValue(value: unknown): string {
+ }
+ 
+ function isTerminalEvent(eventType: string | undefined): boolean {
+-  return !!eventType && /^(response\.|turn\.|thread\.)?(completed|failed|cancelled|done)$/.test(eventType);
++  return (
++    !!eventType &&
++    /^(response\.|turn\.|thread\.)?(completed|failed|cancelled|done)$/.test(eventType)
++  );
+ }
+ 
+ function shouldIgnoreLifecycleEvent(eventType: string | undefined): boolean {
+diff --git a/packages/agent-adapters/src/codex.test.ts b/packages/agent-adapters/src/codex.test.ts
+index 05d5806..cc9f36c 100644
+--- a/packages/agent-adapters/src/codex.test.ts
++++ b/packages/agent-adapters/src/codex.test.ts
+@@ -202,10 +202,10 @@ describe("CodexAdapter", () => {
+     });
+ 
+     it("truncates long summaries", () => {
+-      const longMsg = "x".repeat(300);
++      const longMsg = "x".repeat(25000);
+       const logs = `{"type":"message","role":"assistant","content":"${longMsg}"}`;
+       const result = adapter.parseResult(0, logs);
+-      expect(result.summary!.length).toBeLessThanOrEqual(201); // 200 + ellipsis
++      expect(result.summary!.length).toBeLessThanOrEqual(20001); // 20000 + ellipsis
+     });
+ 
+     it("detects auth errors in raw text", () => {
+diff --git a/packages/agent-adapters/src/codex.ts b/packages/agent-adapters/src/codex.ts
+index e353e4e..b0f1375 100644
+--- a/packages/agent-adapters/src/codex.ts
++++ b/packages/agent-adapters/src/codex.ts
+@@ -274,12 +274,23 @@ function extractText(value: unknown): string {
+   const obj = value as Record<string, unknown>;
+   const type = typeof obj.type === "string" ? obj.type : "";
+ 
+-  if (type === "text" || type === "output_text" || type === "summary_text" || type === "input_text") {
++  if (
++    type === "text" ||
++    type === "output_text" ||
++    type === "summary_text" ||
++    type === "input_text"
++  ) {
+     return extractText(obj.text ?? obj.content);
+   }
+   if (type === "message") return extractText(obj.content ?? obj.text);
+   if (type === "agent_message") return extractText(obj.text ?? obj.content ?? obj.message);
+-  if (type.includes("function_call") || type.includes("tool_call") || type === "reasoning" || type === "command_execution") return "";
++  if (
++    type.includes("function_call") ||
++    type.includes("tool_call") ||
++    type === "reasoning" ||
++    type === "command_execution"
++  )
++    return "";
+ 
+   for (const key of ["text", "output_text", "content", "message", "result", "delta"]) {
+     if (key in obj) {

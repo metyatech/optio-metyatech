@@ -52,7 +52,7 @@ export function parseCodexEvent(
       type: "tool_use",
       content: `$ ${commandExecution.command.split("\n")[0].slice(0, 120)}`,
       metadata: {
-        toolName: "command_execution",
+        toolName: "Bash",
         toolInput: { command: commandExecution.command },
         toolUseId: commandExecution.id,
       },
@@ -87,7 +87,7 @@ export function parseCodexEvent(
       type: "tool_use",
       content: formatCodexToolUse(toolUse.name, toolUse.args),
       metadata: {
-        toolName: toolUse.name,
+        toolName: eventToolNameForUi(toolUse.name),
         toolInput: toolUse.args,
         toolUseId: toolUse.id,
       },
@@ -286,6 +286,7 @@ function parseToolUse(
   const source =
     payloadType.includes("function_call") || payloadType.includes("tool_call") ? payload : event;
   const sourceType = typeof source?.type === "string" ? source.type : "";
+  if (sourceType.includes("output") || sourceType.includes("result")) return null;
   if (!sourceType.includes("function_call") && !sourceType.includes("tool_call")) return null;
 
   const name = source.name ?? source.function?.name ?? source.tool_name ?? "tool";
@@ -423,6 +424,18 @@ function formatCodexToolUse(name: string, args: Record<string, unknown> | undefi
     case "list_dir":
     case "listDir":
       return `List ${args.path ?? args.dir ?? "."}`;
+    default:
+      return name;
+  }
+}
+
+function eventToolNameForUi(name: string): string {
+  switch (name) {
+    case "shell":
+    case "bash":
+    case "terminal":
+    case "exec_command":
+      return "Bash";
     default:
       return name;
   }

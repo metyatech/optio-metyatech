@@ -121,7 +121,7 @@ describe("parseCodexEvent", () => {
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0].type).toBe("tool_use");
     expect(result.entries[0].content).toBe("$ git status");
-    expect(result.entries[0].metadata?.toolName).toBe("shell");
+    expect(result.entries[0].metadata?.toolName).toBe("Bash");
     expect(result.entries[0].metadata?.toolUseId).toBe("call-1");
   });
 

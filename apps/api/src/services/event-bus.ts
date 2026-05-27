@@ -1,5 +1,8 @@
 import { Redis } from "ioredis";
+import { and, desc, eq } from "drizzle-orm";
 import type { WsEvent } from "@optio/shared";
+import { db } from "../db/client.js";
+import { taskLogs } from "../db/schema.js";
 import { redisConnectionUrl, redisTlsOptions } from "./redis-config.js";
 import { getCurrentTraceId } from "../telemetry/spans.js";
 
@@ -16,18 +19,66 @@ export async function publishEvent(event: WsEvent): Promise<void> {
   const redis = getPublisher();
   const channel = `optio:events`;
 
+  const eventForPublish = await enrichTaskLogEvent(event);
+
   // Attach current trace ID for correlation in observability backends
   const traceId = getCurrentTraceId();
-  const enrichedEvent = traceId ? { ...event, traceId } : event;
+  const enrichedEvent = traceId ? { ...eventForPublish, traceId } : eventForPublish;
 
   await redis.publish(channel, JSON.stringify(enrichedEvent));
 
   // Also publish to entity-specific channels for targeted subscriptions
-  if ("taskId" in event) {
-    await redis.publish(`optio:task:${event.taskId}`, JSON.stringify(enrichedEvent));
+  if ("taskId" in eventForPublish) {
+    await redis.publish(`optio:task:${eventForPublish.taskId}`, JSON.stringify(enrichedEvent));
   }
-  if ("prReviewId" in event && event.prReviewId) {
-    await redis.publish(`optio:pr-review:${event.prReviewId}`, JSON.stringify(enrichedEvent));
+  if ("prReviewId" in eventForPublish && eventForPublish.prReviewId) {
+    await redis.publish(
+      `optio:pr-review:${eventForPublish.prReviewId}`,
+      JSON.stringify(enrichedEvent),
+    );
+  }
+}
+
+async function enrichTaskLogEvent(event: WsEvent): Promise<WsEvent> {
+  if (event.type !== "task:log") return event;
+
+  const taskLogEvent = event as WsEvent & {
+    logId?: string;
+    logType?: string;
+    metadata?: Record<string, unknown> | null;
+  };
+  if (taskLogEvent.logId && taskLogEvent.logType !== undefined) return event;
+
+  try {
+    const [log] = await db
+      .select({
+        id: taskLogs.id,
+        timestamp: taskLogs.timestamp,
+        logType: taskLogs.logType,
+        metadata: taskLogs.metadata,
+      })
+      .from(taskLogs)
+      .where(
+        and(
+          eq(taskLogs.taskId, event.taskId),
+          eq(taskLogs.stream, event.stream),
+          eq(taskLogs.content, event.content),
+        ),
+      )
+      .orderBy(desc(taskLogs.timestamp))
+      .limit(1);
+
+    if (!log) return event;
+
+    return {
+      ...event,
+      logId: log.id,
+      timestamp: log.timestamp.toISOString(),
+      logType: log.logType ?? undefined,
+      metadata: log.metadata ?? undefined,
+    } as WsEvent;
+  } catch {
+    return event;
   }
 }
 
