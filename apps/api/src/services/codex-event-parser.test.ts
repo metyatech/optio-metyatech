@@ -43,6 +43,73 @@ describe("parseCodexEvent", () => {
     expect(result.entries[0].content).toBe("Part 1\nPart 2");
   });
 
+  it("parses modern response.output_text.done events", () => {
+    const line = JSON.stringify({
+      type: "response.output_text.done",
+      text: "Here is the implementation plan.",
+      response: { id: "resp-1" },
+    });
+    const result = parseCodexEvent(line, TASK_ID);
+    expect(result.entries).toHaveLength(1);
+    expect(result.sessionId).toBe("resp-1");
+    expect(result.entries[0].type).toBe("text");
+    expect(result.entries[0].content).toBe("Here is the implementation plan.");
+  });
+
+  it("parses modern output item message events", () => {
+    const line = JSON.stringify({
+      type: "response.output_item.done",
+      item: {
+        id: "msg-1",
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Final plan text" }],
+      },
+    });
+    const result = parseCodexEvent(line, TASK_ID);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].type).toBe("text");
+    expect(result.entries[0].content).toBe("Final plan text");
+  });
+
+  it("parses response.completed output messages", () => {
+    const line = JSON.stringify({
+      type: "response.completed",
+      response: {
+        id: "resp-2",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Completed plan text" }],
+          },
+        ],
+      },
+    });
+    const result = parseCodexEvent(line, TASK_ID);
+    expect(result.entries).toHaveLength(1);
+    expect(result.isTerminal).toBe(true);
+    expect(result.entries[0].type).toBe("text");
+    expect(result.entries[0].content).toBe("Completed plan text");
+  });
+
+  it("parses modern function-call output-item events", () => {
+    const line = JSON.stringify({
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        name: "exec_command",
+        call_id: "call-2",
+        arguments: JSON.stringify({ command: "npm test" }),
+      },
+    });
+    const result = parseCodexEvent(line, TASK_ID);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].type).toBe("tool_use");
+    expect(result.entries[0].content).toBe("$ npm test");
+    expect(result.entries[0].metadata?.toolUseId).toBe("call-2");
+  });
+
   it("parses function call (shell)", () => {
     const line = JSON.stringify({
       type: "function_call",
@@ -189,9 +256,11 @@ describe("parseCodexEvent", () => {
     expect(result.entries[0].content).toContain("$0.0500");
   });
 
-  it("skips unknown JSON events", () => {
+  it("surfaces unknown JSON events for diagnostics", () => {
     const line = JSON.stringify({ type: "stream_delta", data: "partial" });
     const result = parseCodexEvent(line, TASK_ID);
-    expect(result.entries).toHaveLength(0);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].type).toBe("system");
+    expect(result.entries[0].content).toContain("Unhandled Codex event stream_delta");
   });
 });
