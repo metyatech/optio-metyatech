@@ -22,7 +22,7 @@ describe("parseCodexEvent item.completed events", () => {
     expect(result.entries[0].content).toBe("I will stay in planning mode only.");
   });
 
-  it("parses command_execution items as tool use and tool result logs", () => {
+  it("parses command_execution items as Bash tool use and tool result logs", () => {
     const result = parseCodexEvent(
       JSON.stringify({
         type: "item.completed",
@@ -41,8 +41,33 @@ describe("parseCodexEvent item.completed events", () => {
     expect(result.entries).toHaveLength(2);
     expect(result.entries[0].type).toBe("tool_use");
     expect(result.entries[0].content).toBe("$ npm test");
+    expect(result.entries[0].metadata?.toolName).toBe("Bash");
     expect(result.entries[1].type).toBe("tool_result");
     expect(result.entries[1].content).toBe("tests passed");
     expect(result.entries[1].metadata?.exitCode).toBe(0);
+  });
+
+  it("parses web_search items as WebSearch tool use logs", () => {
+    const result = parseCodexEvent(
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "ws_1",
+          type: "web_search",
+          query: "medium-zoom npm VitePress image zoom plugin",
+          action: {
+            type: "search",
+            queries: ["medium-zoom npm VitePress image zoom plugin"],
+          },
+        },
+      }),
+      TASK_ID,
+    );
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].type).toBe("tool_use");
+    expect(result.entries[0].content).toBe("Search: medium-zoom npm VitePress image zoom plugin");
+    expect(result.entries[0].metadata?.toolName).toBe("WebSearch");
+    expect(result.entries[0].metadata?.toolUseId).toBe("ws_1");
   });
 });
