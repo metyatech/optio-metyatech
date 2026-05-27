@@ -14,6 +14,8 @@ import type { AgentAdapter } from "./types.js";
  * - { type: "message", role: "assistant"|"system", content: "..." }
  * - { type: "function_call", name: "shell"|"...", call_id: "...", arguments: "..." }
  * - { type: "function_call_output", call_id: "...", output: "..." }
+ * - { type: "item.completed", item: { type: "agent_message", text: "..." } }
+ * - { type: "item.completed", item: { type: "command_execution", ... } }
  * - { type: "response.output_text.done", text: "..." }
  * - { type: "response.output_item.done", item: { type: "message", ... } }
  * - { type: "response.completed", response: { output: [...] } }
@@ -251,6 +253,9 @@ function extractAssistantText(event: any): string {
   if (payload?.type === "message" && payload.role === "assistant") {
     return extractText(payload.content ?? payload.text);
   }
+  if (payload?.type === "agent_message") {
+    return extractText(payload.text ?? payload.content ?? payload.message);
+  }
 
   if (event.type === "response.output_text.done" || event.type === "response.output_text.delta") {
     return extractText(event.text ?? event.delta ?? event.content);
@@ -273,7 +278,8 @@ function extractText(value: unknown): string {
     return extractText(obj.text ?? obj.content);
   }
   if (type === "message") return extractText(obj.content ?? obj.text);
-  if (type.includes("function_call") || type.includes("tool_call") || type === "reasoning") return "";
+  if (type === "agent_message") return extractText(obj.text ?? obj.content ?? obj.message);
+  if (type.includes("function_call") || type.includes("tool_call") || type === "reasoning" || type === "command_execution") return "";
 
   for (const key of ["text", "output_text", "content", "message", "result", "delta"]) {
     if (key in obj) {
