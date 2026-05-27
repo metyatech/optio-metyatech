@@ -274,12 +274,23 @@ function extractText(value: unknown): string {
   const obj = value as Record<string, unknown>;
   const type = typeof obj.type === "string" ? obj.type : "";
 
-  if (type === "text" || type === "output_text" || type === "summary_text" || type === "input_text") {
+  if (
+    type === "text" ||
+    type === "output_text" ||
+    type === "summary_text" ||
+    type === "input_text"
+  ) {
     return extractText(obj.text ?? obj.content);
   }
   if (type === "message") return extractText(obj.content ?? obj.text);
   if (type === "agent_message") return extractText(obj.text ?? obj.content ?? obj.message);
-  if (type.includes("function_call") || type.includes("tool_call") || type === "reasoning" || type === "command_execution") return "";
+  if (
+    type.includes("function_call") ||
+    type.includes("tool_call") ||
+    type === "reasoning" ||
+    type === "command_execution"
+  )
+    return "";
 
   for (const key of ["text", "output_text", "content", "message", "result", "delta"]) {
     if (key in obj) {

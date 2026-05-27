@@ -202,10 +202,10 @@ describe("CodexAdapter", () => {
     });
 
     it("truncates long summaries", () => {
-      const longMsg = "x".repeat(300);
+      const longMsg = "x".repeat(30_000);
       const logs = `{"type":"message","role":"assistant","content":"${longMsg}"}`;
       const result = adapter.parseResult(0, logs);
-      expect(result.summary!.length).toBeLessThanOrEqual(201); // 200 + ellipsis
+      expect(result.summary!.length).toBeLessThanOrEqual(20_001); // 20_000 + ellipsis
     });
 
     it("detects auth errors in raw text", () => {

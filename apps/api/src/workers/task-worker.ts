@@ -1992,77 +1992,89 @@ export function shouldRunPlanningMode(opts: {
 /** Infer exit code from agent logs based on agent-specific error patterns */
 export function inferExitCode(agentType: string, logs: string): number {
   switch (agentType) {
-    case "codex": {
-      // Codex: look for error events in JSON output or OpenAI-specific failures
-      const hasErrorEvent = logs.includes('"type":"error"') || logs.includes('"type": "error"');
-      const hasApiErrorEnvelope = /"error"\s*:\s*\{\s*"message"/.test(logs);
-      const hasAuthError =
-        /OPENAI_API_KEY|invalid.*api.?key|unauthorized|authentication.*failed/i.test(logs);
-      const hasQuotaError = /quota|insufficient_quota|billing/i.test(logs);
-      const hasModelError = /model_not_found|model.*not found|does not exist.*model/i.test(logs);
-      const hasContentFilter = /content.?filter|content.?policy|safety.?system/i.test(logs);
-      return hasErrorEvent ||
-        hasApiErrorEnvelope ||
-        hasAuthError ||
-        hasQuotaError ||
-        hasModelError ||
-        hasContentFilter
-        ? 1
-        : 0;
-    }
     case "copilot": {
-      const hasResultError = logs.includes('"is_error":true') || logs.includes('"is_error": true');
-      const hasErrorEvent = logs.includes('"type":"error"') || logs.includes('"type": "error"');
-      const hasAuthError =
-        /COPILOT_GITHUB_TOKEN|copilot.*auth|subscription.*required|unauthorized/i.test(logs);
-      const hasFatalError =
-        logs.includes("fatal:") || logs.includes("Error: authentication_failed");
-      return hasResultError || hasErrorEvent || hasAuthError || hasFatalError ? 1 : 0;
+      for (const line of logs.split("\n")) {
+        try {
+          const ev = JSON.parse(line);
+          if (ev.is_error === true || ev.type === "error") return 1;
+        } catch {
+          // Not JSON — skip
+        }
+      }
+      for (const line of logs.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          JSON.parse(trimmed);
+          continue; // Skip JSON lines
+        } catch {
+          if (
+            /COPILOT_GITHUB_TOKEN|copilot.*auth|subscription.*required|unauthorized/i.test(
+              trimmed,
+            ) ||
+            trimmed.includes("fatal:") ||
+            trimmed.includes("Error: authentication_failed")
+          ) {
+            return 1;
+          }
+        }
+      }
+      return 0;
     }
-    case "opencode": {
-      // OpenCode: similar to Codex — look for error events and provider-specific failures
-      const hasErrorEvent = logs.includes('"type":"error"') || logs.includes('"type": "error"');
-      const hasApiErrorEnvelope = /"error"\s*:\s*\{\s*"message"/.test(logs);
-      const hasAuthError =
-        /ANTHROPIC_API_KEY|OPENAI_API_KEY|GROQ_API_KEY|invalid.*api.?key|unauthorized|authentication.*failed/i.test(
-          logs,
-        );
-      const hasModelError = /model_not_found|model.*not found|does not exist.*model/i.test(logs);
-      const hasFatalError =
-        logs.includes("fatal:") || logs.includes("Error: authentication_failed");
-      return hasErrorEvent || hasApiErrorEnvelope || hasAuthError || hasModelError || hasFatalError
-        ? 1
-        : 0;
-    }
+    case "codex":
+    case "opencode":
+    case "openclaw":
     case "gemini": {
-      const hasErrorEvent = logs.includes('"type":"error"') || logs.includes('"type": "error"');
-      // Match auth errors by error-descriptive patterns only (not bare env var names which
-      // could appear in diagnostic output and cause false positives).
-      const hasAuthError =
-        /api.?key.*(?:invalid|not valid|missing)|invalid.*api.?key|api_key_invalid|permission denied|unauthorized/i.test(
-          logs,
-        );
-      const hasQuotaError = /quota|resource.?exhausted|rate.?limit/i.test(logs);
-      const hasModelError = /model.*not found|model_not_found|does not exist.*model/i.test(logs);
-      const hasTurnLimit = /turn.?limit|exit:?\s*53\b/i.test(logs);
-      return hasErrorEvent || hasAuthError || hasQuotaError || hasModelError || hasTurnLimit
-        ? 1
-        : 0;
-    }
-    case "openclaw": {
-      // OpenClaw: similar to OpenCode — look for error events and provider-specific failures
-      const hasErrorEvent = logs.includes('"type":"error"') || logs.includes('"type": "error"');
-      const hasApiErrorEnvelope = /"error"\s*:\s*\{\s*"message"/.test(logs);
-      const hasAuthError =
-        /ANTHROPIC_API_KEY|OPENAI_API_KEY|OPENCLAW_API_KEY|invalid.*api.?key|unauthorized|authentication.*failed/i.test(
-          logs,
-        );
-      const hasModelError = /model_not_found|model.*not found|does not exist.*model/i.test(logs);
-      const hasFatalError =
-        logs.includes("fatal:") || logs.includes("Error: authentication_failed");
-      return hasErrorEvent || hasApiErrorEnvelope || hasAuthError || hasModelError || hasFatalError
-        ? 1
-        : 0;
+      // For NDJSON-based agents, prioritize structured error events.
+      // Raw string matching on the full logs produces false positives (e.g. reading a file
+      // that contains the word "quota" or "OPENAI_API_KEY").
+      for (const line of logs.split("\n")) {
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === "error") return 1;
+          if (ev.error && typeof ev.error === "object" && ev.error.message) return 1;
+        } catch {
+          // Not JSON — skip
+        }
+      }
+
+      // No structural error found.
+      // Fall back to heuristic checks on raw (non-JSON) output only.
+      for (const line of logs.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          JSON.parse(trimmed);
+          continue; // Skip JSON lines (where tool outputs and file contents live)
+        } catch {
+          // Raw text — check for provider-specific fatal failures
+          if (agentType === "gemini") {
+            if (
+              /api.?key.*(?:invalid|not valid|missing)|invalid.*api.?key|api_key_invalid|permission denied|unauthorized/i.test(
+                trimmed,
+              )
+            )
+              return 1;
+            if (/quota|resource.?exhausted|rate.?limit/i.test(trimmed)) return 1;
+            if (/model.*not found|model_not_found|does not exist.*model/i.test(trimmed)) return 1;
+            if (/turn.?limit|exit:?\s*53\b/i.test(trimmed)) return 1;
+          } else {
+            // codex, opencode, openclaw
+            if (
+              /OPENAI_API_KEY|ANTHROPIC_API_KEY|GROQ_API_KEY|OPENCLAW_API_KEY|invalid.*api.?key|unauthorized|authentication.*failed/i.test(
+                trimmed,
+              )
+            )
+              return 1;
+            if (/quota|insufficient_quota|billing/i.test(trimmed)) return 1;
+            if (/model_not_found|model.*not found|does not exist.*model/i.test(trimmed)) return 1;
+            if (/content.?filter|content.?policy|safety.?system/i.test(trimmed)) return 1;
+            if (trimmed.includes("fatal:") || trimmed.includes("Error: authentication_failed"))
+              return 1;
+          }
+        }
+      }
+      return 0;
     }
     case "claude-code":
     default: {
