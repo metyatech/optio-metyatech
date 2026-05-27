@@ -3,14 +3,15 @@ import type { AgentLogEntry } from "@optio/shared";
 /**
  * Parse a single NDJSON line from the Codex CLI's --json output.
  *
- * Codex outputs events as one JSON object per line:
- * - { type: "message", role: "assistant"|"system", content: "..." }
- * - { type: "function_call", name: "shell"|"...", call_id: "...", arguments: "..." }
- * - { type: "function_call_output", call_id: "...", output: "..." }
- * - { type: "error", message: "..." }
- * - Events with usage data (input_tokens, output_tokens)
+ * Codex CLI JSON event shapes have changed over time. Older versions emitted
+ * direct events like `{ type: "message", role: "assistant", content: ... }`;
+ * newer versions commonly wrap Responses-style items in lifecycle events such
+ * as `{ type: "item.completed", item: { type: "message", ... } }` or output
+ * text events such as `{ type: "response.output_text.done", text: ... }`.
  *
- * Returns multiple entries per line when a message contains structured content.
+ * This parser intentionally accepts both families. Unknown non-lifecycle JSON
+ * events are surfaced as a compact `system` log rather than silently discarded,
+ * so future Codex CLI event-shape changes are visible in the UI.
  */
 export function parseCodexEvent(
   line: string,
@@ -20,113 +21,47 @@ export function parseCodexEvent(
   try {
     event = JSON.parse(line);
   } catch {
-    // Not JSON — raw text from shell/git
-    if (!line.trim()) return { entries: [] };
-    const clean = line.replace(/\x1b\[[0-9;]*[a-zA-Z]|\r/g, "").trim();
-    if (!clean || clean.length < 2) return { entries: [] };
-    return {
-      entries: [{ taskId, timestamp: new Date().toISOString(), type: "text", content: clean }],
-    };
+    return rawTextEntry(line, taskId);
   }
 
   const timestamp = new Date().toISOString();
   const entries: AgentLogEntry[] = [];
+  const sessionId = getSessionId(event);
+  const eventType = typeof event.type === "string" ? event.type : undefined;
+  const payload = getPayload(event);
+  const payloadType = typeof payload?.type === "string" ? payload.type : undefined;
 
-  // Extract session/conversation ID if present
-  const sessionId = (event.id ?? event.session_id ?? event.conversation_id) as string | undefined;
-
-  // System message or init
-  if (event.type === "message" && event.role === "system") {
-    const content =
-      typeof event.content === "string" ? event.content : JSON.stringify(event.content);
-    if (content?.trim()) {
-      entries.push({
-        taskId,
-        timestamp,
-        sessionId,
-        type: "system",
-        content,
-      });
-    }
+  if (event.error && typeof event.error === "object" && event.error.message) {
+    entries.push(makeEntry(taskId, timestamp, sessionId, "error", event.error.message));
     return { entries, sessionId };
   }
 
-  // Assistant message
-  if (event.type === "message" && event.role === "assistant") {
-    const content =
-      typeof event.content === "string"
-        ? event.content
-        : Array.isArray(event.content)
-          ? event.content
-              .map((block: any) => {
-                if (typeof block === "string") return block;
-                if (block.type === "text") return block.text;
-                if (block.type === "output_text") return block.text;
-                return "";
-              })
-              .filter(Boolean)
-              .join("\n")
-          : "";
-    if (content?.trim()) {
-      entries.push({
-        taskId,
-        timestamp,
-        sessionId,
-        type: "text",
-        content,
-      });
-    }
-
-    // Check for usage data in the message event
-    const usage = event.usage ?? event.response?.usage;
-    if (usage) {
-      const meta: string[] = [];
-      const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
-      const outputTokens = usage.output_tokens ?? usage.completion_tokens ?? 0;
-      if (inputTokens) meta.push(`${inputTokens} input tokens`);
-      if (outputTokens) meta.push(`${outputTokens} output tokens`);
-      if (event.total_cost_usd) meta.push(`$${event.total_cost_usd.toFixed(4)}`);
-      if (meta.length) {
-        entries.push({
-          taskId,
-          timestamp,
-          sessionId,
-          type: "info",
-          content: `Usage: ${meta.join(" · ")}`,
-          metadata: {
-            inputTokens,
-            outputTokens,
-            cost: event.total_cost_usd,
-          },
-        });
-      }
-    }
+  if (eventType === "error" || payloadType === "error") {
+    const msg = event.message ?? event.error ?? payload?.message ?? payload?.error ?? JSON.stringify(event);
+    entries.push(makeEntry(taskId, timestamp, sessionId, "error", stringifyValue(msg)));
     return { entries, sessionId };
   }
 
-  // Function call (tool use)
-  if (event.type === "function_call") {
-    const args = parseArgs(event.arguments);
-    const formatted = formatCodexToolUse(event.name, args);
+  const toolUse = parseToolUse(event, payload);
+  if (toolUse) {
     entries.push({
       taskId,
       timestamp,
       sessionId,
       type: "tool_use",
-      content: formatted,
+      content: formatCodexToolUse(toolUse.name, toolUse.args),
       metadata: {
-        toolName: event.name,
-        toolInput: args,
-        toolUseId: event.call_id,
+        toolName: toolUse.name,
+        toolInput: toolUse.args,
+        toolUseId: toolUse.id,
       },
     });
     return { entries, sessionId };
   }
 
-  // Function call output (tool result)
-  if (event.type === "function_call_output") {
-    const output = typeof event.output === "string" ? event.output : JSON.stringify(event.output);
-    const trimmed = output.length > 300 ? output.slice(0, 300) + "…" : output;
+  const toolResult = parseToolResult(event, payload);
+  if (toolResult) {
+    const trimmed = toolResult.output.length > 300 ? toolResult.output.slice(0, 300) + "…" : toolResult.output;
     if (trimmed.trim()) {
       entries.push({
         taskId,
@@ -134,68 +69,228 @@ export function parseCodexEvent(
         sessionId,
         type: "tool_result",
         content: trimmed,
-        metadata: { toolUseId: event.call_id },
+        metadata: { toolUseId: toolResult.id },
       });
     }
     return { entries, sessionId };
   }
 
-  // Error event
-  if (event.type === "error") {
-    const msg = event.message ?? event.error ?? JSON.stringify(event);
-    entries.push({
-      taskId,
-      timestamp,
-      sessionId,
-      type: "error",
-      content: msg,
-    });
-    return { entries, sessionId };
+  const message = parseMessage(event, payload);
+  if (message) {
+    if (message.content.trim()) {
+      entries.push(
+        makeEntry(taskId, timestamp, sessionId, message.role === "system" ? "system" : "text", message.content),
+      );
+    }
+    addUsageEntry(entries, taskId, timestamp, sessionId, event);
+    addUsageEntry(entries, taskId, timestamp, sessionId, payload);
+    return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
   }
 
-  // Reasoning/thinking event (some Codex models output this)
-  if (event.type === "reasoning") {
-    const content = typeof event.content === "string" ? event.content : "";
-    if (content.trim()) {
-      entries.push({
+  const reasoning = parseReasoning(event, payload);
+  if (reasoning.trim()) {
+    entries.push(makeEntry(taskId, timestamp, sessionId, "thinking", reasoning));
+    return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
+  }
+
+  const outputText = parseOutputTextEvent(event);
+  if (outputText.trim()) {
+    entries.push(makeEntry(taskId, timestamp, sessionId, "text", outputText));
+    addUsageEntry(entries, taskId, timestamp, sessionId, event);
+    return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
+  }
+
+  addUsageEntry(entries, taskId, timestamp, sessionId, event);
+  addUsageEntry(entries, taskId, timestamp, sessionId, payload);
+  if (entries.length > 0) return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
+
+  // Some terminal response events put the full output under response.output.
+  const responseText = extractText(event.response?.output ?? event.output);
+  if (responseText.trim()) {
+    entries.push(makeEntry(taskId, timestamp, sessionId, "text", responseText));
+    return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
+  }
+
+  if (shouldIgnoreLifecycleEvent(eventType)) {
+    return { entries: [], sessionId, isTerminal: isTerminalEvent(eventType) };
+  }
+
+  if (eventType) {
+    entries.push(
+      makeEntry(
         taskId,
         timestamp,
         sessionId,
-        type: "thinking",
-        content,
-      });
-    }
-    return { entries, sessionId };
+        "system",
+        `Unhandled Codex event ${eventType}: ${truncate(JSON.stringify(event), 1000)}`,
+        { codexEventType: eventType },
+      ),
+    );
   }
 
-  // Generic event with usage data (summary)
-  if (event.usage || event.response?.usage) {
-    const usage = event.usage ?? event.response.usage;
-    const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
-    const outputTokens = usage.output_tokens ?? usage.completion_tokens ?? 0;
-    const meta: string[] = [];
-    if (inputTokens) meta.push(`${inputTokens} input tokens`);
-    if (outputTokens) meta.push(`${outputTokens} output tokens`);
-    if (event.total_cost_usd) meta.push(`$${event.total_cost_usd.toFixed(4)}`);
-    if (meta.length) {
-      entries.push({
-        taskId,
-        timestamp,
-        sessionId,
-        type: "info",
-        content: `Usage: ${meta.join(" · ")}`,
-        metadata: {
-          inputTokens,
-          outputTokens,
-          cost: event.total_cost_usd,
-        },
-      });
+  return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
+}
+
+function rawTextEntry(
+  line: string,
+  taskId: string,
+): { entries: AgentLogEntry[]; sessionId?: string; isTerminal?: boolean } {
+  if (!line.trim()) return { entries: [] };
+  const clean = line.replace(/\x1b\[[0-9;]*[a-zA-Z]|\r/g, "").trim();
+  if (!clean || clean.length < 2) return { entries: [] };
+  return {
+    entries: [{ taskId, timestamp: new Date().toISOString(), type: "text", content: clean }],
+  };
+}
+
+function makeEntry(
+  taskId: string,
+  timestamp: string,
+  sessionId: string | undefined,
+  type: AgentLogEntry["type"],
+  content: string,
+  metadata?: Record<string, unknown>,
+): AgentLogEntry {
+  return { taskId, timestamp, sessionId, type, content, metadata };
+}
+
+function getSessionId(event: any): string | undefined {
+  return (
+    event.session_id ??
+    event.conversation_id ??
+    event.thread_id ??
+    event.response?.id ??
+    event.item?.id ??
+    event.id
+  ) as string | undefined;
+}
+
+function getPayload(event: any): any {
+  return event.item ?? event.message ?? event.delta ?? event.response ?? event;
+}
+
+function parseMessage(event: any, payload: any): { role: string; content: string } | null {
+  if (event.type === "message" && event.role) {
+    return { role: event.role, content: extractText(event.content) };
+  }
+  if (payload?.type === "message" && payload.role) {
+    return { role: payload.role, content: extractText(payload.content ?? payload.text) };
+  }
+  if (event.type === "response.output_item.done" && payload?.role) {
+    return { role: payload.role, content: extractText(payload.content ?? payload.text) };
+  }
+  return null;
+}
+
+function parseReasoning(event: any, payload: any): string {
+  const eventType = typeof event.type === "string" ? event.type : "";
+  const payloadType = typeof payload?.type === "string" ? payload.type : "";
+  if (eventType.includes("reasoning") || payloadType === "reasoning") {
+    return extractText(payload?.summary ?? payload?.content ?? payload?.text ?? event.summary ?? event.content ?? event.text ?? event.delta);
+  }
+  return "";
+}
+
+function parseOutputTextEvent(event: any): string {
+  const eventType = typeof event.type === "string" ? event.type : "";
+  if (
+    eventType === "response.output_text.done" ||
+    eventType === "response.output_text.delta" ||
+    eventType === "output_text" ||
+    eventType === "message_delta"
+  ) {
+    return extractText(event.text ?? event.delta ?? event.content);
+  }
+  return "";
+}
+
+function parseToolUse(
+  event: any,
+  payload: any,
+): { name: string; args?: Record<string, unknown>; id?: string } | null {
+  const eventType = typeof event.type === "string" ? event.type : "";
+  const payloadType = typeof payload?.type === "string" ? payload.type : "";
+  const source = payloadType.includes("function_call") || payloadType.includes("tool_call") ? payload : event;
+  const sourceType = typeof source?.type === "string" ? source.type : "";
+  if (!sourceType.includes("function_call") && !sourceType.includes("tool_call")) return null;
+
+  const name = source.name ?? source.function?.name ?? source.tool_name ?? "tool";
+  return {
+    name,
+    args: parseArgs(source.arguments ?? source.args ?? source.input ?? source.function?.arguments),
+    id: source.call_id ?? source.id ?? source.tool_call_id ?? event.call_id,
+  };
+}
+
+function parseToolResult(event: any, payload: any): { output: string; id?: string } | null {
+  const eventType = typeof event.type === "string" ? event.type : "";
+  const payloadType = typeof payload?.type === "string" ? payload.type : "";
+  if (!eventType.includes("function_call_output") && !payloadType.includes("function_call_output")) {
+    return null;
+  }
+  const source = payloadType.includes("function_call_output") ? payload : event;
+  return {
+    output: stringifyValue(source.output ?? source.result ?? source.content ?? ""),
+    id: source.call_id ?? source.id ?? source.tool_call_id ?? event.call_id,
+  };
+}
+
+function addUsageEntry(
+  entries: AgentLogEntry[],
+  taskId: string,
+  timestamp: string,
+  sessionId: string | undefined,
+  source: any,
+): void {
+  const usage = source?.usage ?? source?.response?.usage;
+  if (!usage) return;
+  const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
+  const outputTokens = usage.output_tokens ?? usage.completion_tokens ?? 0;
+  const cost = source.total_cost_usd ?? source.response?.total_cost_usd;
+  const meta: string[] = [];
+  if (inputTokens) meta.push(`${inputTokens} input tokens`);
+  if (outputTokens) meta.push(`${outputTokens} output tokens`);
+  if (cost) meta.push(`$${Number(cost).toFixed(4)}`);
+  if (!meta.length) return;
+  const alreadyRecorded = entries.some((entry) => entry.type === "info" && entry.content.startsWith("Usage:"));
+  if (alreadyRecorded) return;
+  entries.push({
+    taskId,
+    timestamp,
+    sessionId,
+    type: "info",
+    content: `Usage: ${meta.join(" · ")}`,
+    metadata: { inputTokens, outputTokens, cost },
+  });
+}
+
+function extractText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(extractText).filter(Boolean).join("\n");
+  if (typeof value !== "object") return "";
+
+  const obj = value as Record<string, unknown>;
+  const type = typeof obj.type === "string" ? obj.type : "";
+
+  if (type === "text" || type === "output_text" || type === "summary_text" || type === "input_text") {
+    return extractText(obj.text ?? obj.content);
+  }
+  if (type === "message") return extractText(obj.content ?? obj.text);
+  if (type === "reasoning") return extractText(obj.summary ?? obj.content ?? obj.text);
+
+  // Do not treat tool-call argument JSON as natural-language output.
+  if (type.includes("function_call") || type.includes("tool_call")) return "";
+
+  for (const key of ["text", "output_text", "content", "message", "summary", "result", "delta"]) {
+    if (key in obj) {
+      const text = extractText(obj[key]);
+      if (text) return text;
     }
-    return { entries, sessionId };
   }
 
-  // Unknown JSON event — skip
-  return { entries: [], sessionId };
+  return "";
 }
 
 /** Parse function call arguments (may be a JSON string or object) */
@@ -221,6 +316,7 @@ function formatCodexToolUse(name: string, args: Record<string, unknown> | undefi
     case "shell":
     case "bash":
     case "terminal":
+    case "exec_command":
       return `$ ${String(args.command ?? args.cmd ?? "")
         .split("\n")[0]
         .slice(0, 120)}`;
@@ -244,4 +340,30 @@ function formatCodexToolUse(name: string, args: Record<string, unknown> | undefi
     default:
       return name;
   }
+}
+
+function stringifyValue(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function isTerminalEvent(eventType: string | undefined): boolean {
+  return !!eventType && /^(response\.|turn\.|thread\.)?(completed|failed|cancelled|done)$/.test(eventType);
+}
+
+function shouldIgnoreLifecycleEvent(eventType: string | undefined): boolean {
+  if (!eventType) return true;
+  return (
+    eventType.endsWith(".created") ||
+    eventType.endsWith(".started") ||
+    eventType.endsWith(".in_progress") ||
+    eventType.endsWith(".delta") ||
+    eventType === "turn.started" ||
+    eventType === "thread.started" ||
+    eventType === "response.created"
+  );
+}
+
+function truncate(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen) + "…";
 }
