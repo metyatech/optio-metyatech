@@ -43,6 +43,27 @@ export function parseCodexEvent(
     return { entries, sessionId };
   }
 
+  const webSearch = parseWebSearch(event, payload);
+  if (webSearch) {
+    entries.push({
+      taskId,
+      timestamp,
+      sessionId,
+      type: "tool_use",
+      content: `Search: ${webSearch.query}`,
+      metadata: {
+        toolName: "WebSearch",
+        toolInput: {
+          query: webSearch.query,
+          ...(webSearch.queries ? { queries: webSearch.queries } : {}),
+          ...(webSearch.action ? { action: webSearch.action } : {}),
+        },
+        toolUseId: webSearch.id,
+      },
+    });
+    return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
+  }
+
   const commandExecution = parseCommandExecution(event, payload);
   if (commandExecution) {
     entries.push({
@@ -259,6 +280,32 @@ function parseOutputTextEvent(event: any): string {
   return "";
 }
 
+function parseWebSearch(
+  event: any,
+  payload: any,
+): { id?: string; query: string; queries?: string[]; action?: unknown } | null {
+  const eventType = typeof event.type === "string" ? event.type : "";
+  const payloadType = typeof payload?.type === "string" ? payload.type : "";
+  if (payloadType !== "web_search" && eventType !== "web_search") return null;
+
+  const source = payloadType === "web_search" ? payload : event;
+  const action = source.action;
+  const queries = Array.isArray(source.queries)
+    ? source.queries.filter((q: unknown): q is string => typeof q === "string" && q.trim().length > 0)
+    : Array.isArray(action?.queries)
+      ? action.queries.filter((q: unknown): q is string => typeof q === "string" && q.trim().length > 0)
+      : undefined;
+  const query = stringifyValue(source.query ?? action?.query ?? queries?.[0] ?? "").trim();
+  const displayQuery = query || queries?.join(", ") || "web search";
+
+  return {
+    id: source.id ?? event.id,
+    query: displayQuery,
+    queries,
+    action,
+  };
+}
+
 function parseCommandExecution(
   event: any,
   payload: any,
@@ -367,7 +414,12 @@ function extractText(value: unknown): string {
   if (type === "reasoning") return extractText(obj.summary ?? obj.content ?? obj.text);
 
   // Do not treat tool-call argument JSON as natural-language output.
-  if (type.includes("function_call") || type.includes("tool_call") || type === "command_execution")
+  if (
+    type.includes("function_call") ||
+    type.includes("tool_call") ||
+    type === "command_execution" ||
+    type === "web_search"
+  )
     return "";
 
   for (const key of ["text", "output_text", "content", "message", "summary", "result", "delta"]) {
