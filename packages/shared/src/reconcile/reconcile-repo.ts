@@ -442,7 +442,6 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
     pr.checksStatus === "passing" &&
     prev.checks !== "passing" &&
     pr.state === "open" &&
-    !snapshot.settings.autoMerge &&
     snapshot.settings.reviewEnabled &&
     snapshot.settings.reviewTrigger === "on_ci_pass" &&
     !snapshot.settings.hasReviewSubtask
@@ -454,7 +453,6 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
   if (
     (prev.checks === null || prev.checks === "none") &&
     pr.state === "open" &&
-    !snapshot.settings.autoMerge &&
     snapshot.settings.reviewEnabled &&
     snapshot.settings.reviewTrigger === "on_pr" &&
     !snapshot.settings.hasReviewSubtask

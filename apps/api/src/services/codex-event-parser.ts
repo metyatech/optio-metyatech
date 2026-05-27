@@ -291,9 +291,13 @@ function parseWebSearch(
   const source = payloadType === "web_search" ? payload : event;
   const action = source.action;
   const queries = Array.isArray(source.queries)
-    ? source.queries.filter((q: unknown): q is string => typeof q === "string" && q.trim().length > 0)
+    ? source.queries.filter(
+        (q: unknown): q is string => typeof q === "string" && q.trim().length > 0,
+      )
     : Array.isArray(action?.queries)
-      ? action.queries.filter((q: unknown): q is string => typeof q === "string" && q.trim().length > 0)
+      ? action.queries.filter(
+          (q: unknown): q is string => typeof q === "string" && q.trim().length > 0,
+        )
       : undefined;
   const query = stringifyValue(source.query ?? action?.query ?? queries?.[0] ?? "").trim();
   const displayQuery = query || queries?.join(", ") || "web search";
