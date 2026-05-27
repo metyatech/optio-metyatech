@@ -6,8 +6,8 @@ import type { AgentLogEntry } from "@optio/shared";
  * Codex CLI JSON event shapes have changed over time. Older versions emitted
  * direct events like `{ type: "message", role: "assistant", content: ... }`;
  * newer versions commonly wrap Responses-style items in lifecycle events such
- * as `{ type: "item.completed", item: { type: "message", ... } }` or output
- * text events such as `{ type: "response.output_text.done", text: ... }`.
+ * as `{ type: "item.completed", item: { type: "agent_message", ... } }` or
+ * output text events such as `{ type: "response.output_text.done", text: ... }`.
  *
  * This parser intentionally accepts both families. Unknown non-lifecycle JSON
  * events are surfaced as a compact `system` log rather than silently discarded,
@@ -40,6 +40,40 @@ export function parseCodexEvent(
     const msg = event.message ?? event.error ?? payload?.message ?? payload?.error ?? JSON.stringify(event);
     entries.push(makeEntry(taskId, timestamp, sessionId, "error", stringifyValue(msg)));
     return { entries, sessionId };
+  }
+
+  const commandExecution = parseCommandExecution(event, payload);
+  if (commandExecution) {
+    entries.push({
+      taskId,
+      timestamp,
+      sessionId,
+      type: "tool_use",
+      content: `$ ${commandExecution.command.split("\n")[0].slice(0, 120)}`,
+      metadata: {
+        toolName: "command_execution",
+        toolInput: { command: commandExecution.command },
+        toolUseId: commandExecution.id,
+      },
+    });
+    const trimmed = commandExecution.output.length > 300
+      ? commandExecution.output.slice(0, 300) + "…"
+      : commandExecution.output;
+    if (trimmed.trim()) {
+      entries.push({
+        taskId,
+        timestamp,
+        sessionId,
+        type: "tool_result",
+        content: trimmed,
+        metadata: {
+          toolUseId: commandExecution.id,
+          exitCode: commandExecution.exitCode,
+          status: commandExecution.status,
+        },
+      });
+    }
+    return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
   }
 
   const toolUse = parseToolUse(event, payload);
@@ -176,6 +210,9 @@ function parseMessage(event: any, payload: any): { role: string; content: string
   if (payload?.type === "message" && payload.role) {
     return { role: payload.role, content: extractText(payload.content ?? payload.text) };
   }
+  if (payload?.type === "agent_message") {
+    return { role: "assistant", content: extractText(payload.text ?? payload.content ?? payload.message) };
+  }
   if (event.type === "response.output_item.done" && payload?.role) {
     return { role: payload.role, content: extractText(payload.content ?? payload.text) };
   }
@@ -202,6 +239,25 @@ function parseOutputTextEvent(event: any): string {
     return extractText(event.text ?? event.delta ?? event.content);
   }
   return "";
+}
+
+function parseCommandExecution(
+  event: any,
+  payload: any,
+): { id?: string; command: string; output: string; exitCode?: number; status?: string } | null {
+  const eventType = typeof event.type === "string" ? event.type : "";
+  const payloadType = typeof payload?.type === "string" ? payload.type : "";
+  if (payloadType !== "command_execution" && eventType !== "command_execution") return null;
+  const source = payloadType === "command_execution" ? payload : event;
+  const command = stringifyValue(source.command ?? source.cmd ?? "").trim();
+  if (!command) return null;
+  return {
+    id: source.id ?? event.id,
+    command,
+    output: stringifyValue(source.aggregated_output ?? source.output ?? source.result ?? ""),
+    exitCode: typeof source.exit_code === "number" ? source.exit_code : undefined,
+    status: typeof source.status === "string" ? source.status : undefined,
+  };
 }
 
 function parseToolUse(
@@ -277,10 +333,11 @@ function extractText(value: unknown): string {
     return extractText(obj.text ?? obj.content);
   }
   if (type === "message") return extractText(obj.content ?? obj.text);
+  if (type === "agent_message") return extractText(obj.text ?? obj.content ?? obj.message);
   if (type === "reasoning") return extractText(obj.summary ?? obj.content ?? obj.text);
 
   // Do not treat tool-call argument JSON as natural-language output.
-  if (type.includes("function_call") || type.includes("tool_call")) return "";
+  if (type.includes("function_call") || type.includes("tool_call") || type === "command_execution") return "";
 
   for (const key of ["text", "output_text", "content", "message", "summary", "result", "delta"]) {
     if (key in obj) {
