@@ -122,7 +122,7 @@ export function parseCodexEvent(
         timestamp,
         sessionId,
         "system",
-        `Unhandled Codex event ${eventType}: ${truncate(JSON.stringify(event), 1000)}`,
+        `Unhandled Codex event ${eventType}: ${truncate(stringifyValue(event), 1000)}`,
         { codexEventType: eventType },
       ),
     );
@@ -208,7 +208,6 @@ function parseToolUse(
   event: any,
   payload: any,
 ): { name: string; args?: Record<string, unknown>; id?: string } | null {
-  const eventType = typeof event.type === "string" ? event.type : "";
   const payloadType = typeof payload?.type === "string" ? payload.type : "";
   const source = payloadType.includes("function_call") || payloadType.includes("tool_call") ? payload : event;
   const sourceType = typeof source?.type === "string" ? source.type : "";
@@ -343,7 +342,9 @@ function formatCodexToolUse(name: string, args: Record<string, unknown> | undefi
 }
 
 function stringifyValue(value: unknown): string {
-  return typeof value === "string" ? value : JSON.stringify(value);
+  if (typeof value === "string") return value;
+  const encoded = JSON.stringify(value);
+  return encoded ?? String(value);
 }
 
 function isTerminalEvent(eventType: string | undefined): boolean {
