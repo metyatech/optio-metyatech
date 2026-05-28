@@ -170,6 +170,8 @@ export const taskRepos = pgTable(
     prChecksStatus: text("pr_checks_status"),
     prReviewStatus: text("pr_review_status"),
     ciStatus: text("ci_status"),
+    prOpenedAt: timestamp("pr_opened_at", { withTimezone: true }),
+    prChecksStatusChangedAt: timestamp("pr_checks_status_changed_at", { withTimezone: true }),
     mergeStatus: text("merge_status"), // "pending" | "merging" | "merged" | "failed" | "skipped"
     mergeOrder: integer("merge_order"), // 1-based position in the queue
     mergeStartedAt: timestamp("merge_started_at", { withTimezone: true }),

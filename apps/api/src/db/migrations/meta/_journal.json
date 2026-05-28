@@ -568,6 +568,13 @@
       "when": 1779145884000,
       "tag": "1779145884_task_planning_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1780012800000,
+      "tag": "1780012800_task_repo_pr_timing",
+      "breakpoints": true
     }
   ]
 }
