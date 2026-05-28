@@ -96,7 +96,9 @@ describe("parseCodexEvent item.completed events", () => {
 
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0].type).toBe("tool_use");
-    expect(result.entries[0].content).toBe("Changed 2 files: edit src/main/kotlin/App.kt, add src/test/kotlin/AppTest.kt");
+    expect(result.entries[0].content).toBe(
+      "Changed 2 files: edit src/main/kotlin/App.kt, add src/test/kotlin/AppTest.kt",
+    );
     expect(result.entries[0].metadata?.toolName).toBe("Edit");
     expect(result.entries[0].metadata?.toolUseId).toBe("item_72");
   });

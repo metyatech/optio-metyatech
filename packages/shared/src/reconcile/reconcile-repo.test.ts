@@ -837,7 +837,7 @@ describe("reconcileRepo — non-coding task types", () => {
         prChecksStatus: "passing",
       },
       {
-        pr: makePr({ checksStatus: "passing" }),
+        pr: makePr({ checksStatus: "passing", reviewStatus: "approved" }),
         settings: autoMergeReadySettings,
       },
     );

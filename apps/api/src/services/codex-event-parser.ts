@@ -347,7 +347,9 @@ function parseFileChange(
   const changes = Array.isArray(source.changes)
     ? source.changes
         .map((change: any): CodexFileChange | null => {
-          const rawPath = stringifyValue(change?.path ?? change?.file_path ?? change?.file ?? "").trim();
+          const rawPath = stringifyValue(
+            change?.path ?? change?.file_path ?? change?.file ?? "",
+          ).trim();
           if (!rawPath) return null;
           const kind = stringifyValue(change?.kind ?? change?.type ?? "").trim() || undefined;
           return { path: normalizeFileChangePath(rawPath), kind };

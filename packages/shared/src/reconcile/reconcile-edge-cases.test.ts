@@ -537,7 +537,7 @@ describe("PR_OPENED — combined signals", () => {
         prChecksStatus: "passing",
       },
       {
-        pr: makePr({ checksStatus: "passing" }),
+        pr: makePr({ checksStatus: "passing", reviewStatus: "approved" }),
         blockingSubtasks: subs,
         settings: {
           stallThresholdMs: 300_000,

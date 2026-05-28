@@ -462,8 +462,10 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
 
   // Auto-merge path.
   const checksOk = pr.checksStatus === "passing" || pr.checksStatus === "none";
+  const reviewOk = !snapshot.settings.reviewEnabled || pr.reviewStatus === "approved";
   if (
     checksOk &&
+    reviewOk &&
     pr.state === "open" &&
     snapshot.settings.autoMerge &&
     !snapshot.settings.cautiousMode &&
