@@ -70,4 +70,34 @@ describe("parseCodexEvent item.completed events", () => {
     expect(result.entries[0].metadata?.toolName).toBe("WebSearch");
     expect(result.entries[0].metadata?.toolUseId).toBe("ws_1");
   });
+
+  it("parses file_change items as Edit tool use logs", () => {
+    const result = parseCodexEvent(
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_72",
+          type: "file_change",
+          changes: [
+            {
+              path: "/workspace/tasks/task-id/repo/src/main/kotlin/App.kt",
+              kind: "update",
+            },
+            {
+              path: "/workspace/tasks/task-id/repo/src/test/kotlin/AppTest.kt",
+              kind: "add",
+            },
+          ],
+          status: "completed",
+        },
+      }),
+      TASK_ID,
+    );
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].type).toBe("tool_use");
+    expect(result.entries[0].content).toBe("Changed 2 files: edit src/main/kotlin/App.kt, add src/test/kotlin/AppTest.kt");
+    expect(result.entries[0].metadata?.toolName).toBe("Edit");
+    expect(result.entries[0].metadata?.toolUseId).toBe("item_72");
+  });
 });
