@@ -8,6 +8,8 @@ import type {
   DependencyObservation,
 } from "./types.js";
 
+const DEFAULT_REVIEW_NO_CI_GRACE_MS = 120_000;
+
 /**
  * Pure decision function for Repo Task runs (tasks table).
  *
@@ -448,6 +450,24 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
     return { kind: "launchReview", reason: "ci_passing_launch_review" };
   }
 
+  // Repositories without CI report "none". Give providers a deterministic
+  // grace window to publish newly-created check runs before launching review.
+  if (
+    pr.checksStatus === "none" &&
+    pr.state === "open" &&
+    snapshot.settings.reviewEnabled &&
+    snapshot.settings.reviewTrigger === "on_ci_pass" &&
+    !snapshot.settings.hasReviewSubtask
+  ) {
+    const delayMs = noCiGraceDelayMs(snapshot);
+    if (delayMs === 0) {
+      return { kind: "launchReview", reason: "ci_none_grace_elapsed_launch_review" };
+    }
+    if (delayMs !== null) {
+      return { kind: "requeueSoon", delayMs, reason: "ci_none_grace_pending" };
+    }
+  }
+
   // First PR detection → trigger review if configured for on_pr.
   if (
     (prev.checks === null || prev.checks === "none") &&
@@ -567,6 +587,34 @@ function aggregateReviewStatus(reposForTask: RepoStatus[]): RepoRunStatus["prRev
   if (statuses.includes("pending")) return "pending";
   if (statuses.some((status) => status === "approved")) return "approved";
   return "none";
+}
+
+function noCiGraceDelayMs(snapshot: WorldSnapshot): number | null {
+  const anchor = latestExplicitNoCiAnchor(snapshot.taskRepos);
+  if (!anchor) return null;
+  const graceMs = snapshot.settings.reviewNoCiGraceMs ?? DEFAULT_REVIEW_NO_CI_GRACE_MS;
+  const elapsedMs = snapshot.now.getTime() - anchor.getTime();
+  return Math.max(0, graceMs - elapsedMs);
+}
+
+function latestExplicitNoCiAnchor(reposForTask: RepoStatus[]): Date | null {
+  const prRepos = (reposForTask ?? []).filter((repo) => repo.prUrl && repo.prState === "open");
+  if (prRepos.length === 0) return null;
+
+  let latest: Date | null = null;
+  for (const repo of prRepos) {
+    const observedChecksStatus = repo.prChecksStatus ?? repo.ciStatus;
+    if (observedChecksStatus !== "none") return null;
+
+    const anchor = repo.prChecksStatusChangedAt ?? repo.prOpenedAt;
+    if (!anchor) return null;
+
+    if (!latest || anchor.getTime() > latest.getTime()) {
+      latest = anchor;
+    }
+  }
+
+  return latest;
 }
 
 function blockingSubtasksComplete(subs: DependencyObservation[]): boolean {

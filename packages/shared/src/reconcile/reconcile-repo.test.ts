@@ -14,6 +14,7 @@ import { TaskState } from "../types/task.js";
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
 const NOW = new Date("2026-04-17T12:00:00Z");
+const REVIEW_NO_CI_GRACE_MS = 60_000;
 
 function makeSpec(overrides: Partial<RepoRunSpec> = {}): RepoRunSpec {
   return {
@@ -86,6 +87,8 @@ function makeTaskRepo(overrides: Partial<RepoStatus> = {}): RepoStatus {
     prChecksStatus: "none",
     prReviewStatus: "none",
     ciStatus: null,
+    prOpenedAt: null,
+    prChecksStatusChangedAt: null,
     mergeStatus: null,
     mergeOrder: null,
     mergeError: null,
@@ -95,11 +98,16 @@ function makeTaskRepo(overrides: Partial<RepoStatus> = {}): RepoStatus {
   };
 }
 
+type SnapshotExtras = Partial<Omit<WorldSnapshot, "settings">> & {
+  settings?: Partial<WorldSnapshot["settings"]>;
+};
+
 function snapshot(
   spec: Partial<RepoRunSpec>,
   status: Partial<RepoRunStatus>,
-  extras: Partial<WorldSnapshot> = {},
+  extras: SnapshotExtras = {},
 ): WorldSnapshot {
+  const { settings: settingsOverrides, ...restExtras } = extras;
   const run: Run = {
     kind: "repo",
     ref: { kind: "repo", id: "task-1" },
@@ -129,14 +137,16 @@ function snapshot(
       autoResume: false,
       reviewEnabled: false,
       reviewTrigger: null,
+      reviewNoCiGraceMs: REVIEW_NO_CI_GRACE_MS,
       offPeakOnly: false,
       offPeakActive: false,
       hasReviewSubtask: false,
       maxAutoResumes: 10,
       recentAutoResumeCount: 0,
+      ...settingsOverrides,
     },
     readErrors: [],
-    ...extras,
+    ...restExtras,
   };
 }
 
@@ -548,6 +558,23 @@ describe("reconcileRepo — PR_OPENED", () => {
     prNumber: 1,
     ...o,
   });
+  const onCiPassReviewSettings = (
+    overrides: Partial<WorldSnapshot["settings"]> = {},
+  ): Partial<WorldSnapshot["settings"]> => ({
+    reviewEnabled: true,
+    reviewTrigger: "on_ci_pass",
+    ...overrides,
+  });
+  const noCiRepo = (ageMs: number, overrides: Partial<RepoStatus> = {}): RepoStatus => {
+    const anchor = new Date(NOW.getTime() - ageMs);
+    return makeTaskRepo({
+      prChecksStatus: "none",
+      ciStatus: "none",
+      prOpenedAt: anchor,
+      prChecksStatusChangedAt: anchor,
+      ...overrides,
+    });
+  };
 
   it("PR merged → COMPLETED", () => {
     const s = snapshot({}, openedStatus(), { pr: makePr({ merged: true, state: "merged" }) });
@@ -676,6 +703,87 @@ describe("reconcileRepo — PR_OPENED", () => {
       },
     });
     expect(reconcileRepo(s).kind).toBe("launchReview");
+  });
+
+  it("CI pass with existing review subtask does not launch duplicate review", () => {
+    const s = snapshot({}, openedStatus({ prChecksStatus: "pending" }), {
+      taskRepos: [makeTaskRepo({ prChecksStatus: "passing" })],
+      settings: onCiPassReviewSettings({ hasReviewSubtask: true }),
+    });
+    expect(reconcileRepo(s).kind).not.toBe("launchReview");
+  });
+
+  it("no CI before grace requeues until on_ci_pass review grace expires", () => {
+    const s = snapshot({}, openedStatus({ prChecksStatus: "none", prState: "open" }), {
+      taskRepos: [noCiRepo(REVIEW_NO_CI_GRACE_MS - 1)],
+      settings: onCiPassReviewSettings(),
+    });
+    const action = reconcileRepo(s);
+    expect(action.kind).toBe("requeueSoon");
+    if (action.kind === "requeueSoon") {
+      expect(action.reason).toBe("ci_none_grace_pending");
+      expect(action.delayMs).toBeGreaterThan(0);
+      expect(action.delayMs).toBeLessThanOrEqual(REVIEW_NO_CI_GRACE_MS);
+      expect(action.delayMs).toBe(1);
+    }
+  });
+
+  it("no CI after grace launches on_ci_pass review", () => {
+    const s = snapshot({}, openedStatus({ prChecksStatus: "none", prState: "open" }), {
+      taskRepos: [noCiRepo(REVIEW_NO_CI_GRACE_MS)],
+      settings: onCiPassReviewSettings(),
+    });
+    expect(reconcileRepo(s)).toEqual({
+      kind: "launchReview",
+      reason: "ci_none_grace_elapsed_launch_review",
+    });
+  });
+
+  it("no CI after grace with existing review subtask does not launch duplicate review", () => {
+    const s = snapshot({}, openedStatus({ prChecksStatus: "none", prState: "open" }), {
+      taskRepos: [noCiRepo(REVIEW_NO_CI_GRACE_MS)],
+      settings: onCiPassReviewSettings({ hasReviewSubtask: true }),
+    });
+    const action = reconcileRepo(s);
+    expect(action.kind).not.toBe("launchReview");
+    expect(action.kind).not.toBe("requeueSoon");
+  });
+
+  it("no CI grace uses the latest repo anchor across task repos", () => {
+    const s = snapshot({}, openedStatus({ prChecksStatus: "none", prState: "open" }), {
+      taskRepos: [
+        noCiRepo(REVIEW_NO_CI_GRACE_MS + 1, { id: "task-repo-1" }),
+        noCiRepo(REVIEW_NO_CI_GRACE_MS - 1, {
+          id: "task-repo-2",
+          prUrl: "https://github.com/acme/other/pull/2",
+          prNumber: 2,
+        }),
+      ],
+      settings: onCiPassReviewSettings(),
+    });
+    expect(reconcileRepo(s).kind).not.toBe("launchReview");
+  });
+
+  it("pending CI with on_ci_pass review remains pending and does not launch review", () => {
+    const s = snapshot(
+      {},
+      openedStatus({ prChecksStatus: "pending", prReviewStatus: "none", prState: "open" }),
+      {
+        taskRepos: [makeTaskRepo({ prChecksStatus: "pending", ciStatus: "pending" })],
+        settings: onCiPassReviewSettings(),
+      },
+    );
+    expect(reconcileRepo(s).kind).toBe("noop");
+  });
+
+  it("failing CI with on_ci_pass review still needs attention instead of launching review", () => {
+    const s = snapshot({}, openedStatus({ prChecksStatus: "pending", prState: "open" }), {
+      taskRepos: [makeTaskRepo({ prChecksStatus: "failing", ciStatus: "failing" })],
+      settings: onCiPassReviewSettings(),
+    });
+    const action = reconcileRepo(s);
+    expect(action.kind).toBe("transition");
+    if (action.kind === "transition") expect(action.to).toBe(TaskState.NEEDS_ATTENTION);
   });
 
   it("review changes from task_repos current status compares against persisted task status", () => {
