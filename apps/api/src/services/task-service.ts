@@ -475,7 +475,13 @@ export async function updateTaskPr(id: string, prUrl: string) {
   if (targetRepoId) {
     await db
       .update(taskRepos)
-      .set({ prUrl, ...(prNumber != null && { prNumber }), prState: "open", updatedAt: now })
+      .set({
+        prUrl,
+        ...(prNumber != null && { prNumber }),
+        prState: "open",
+        prOpenedAt: sql`COALESCE(${taskRepos.prOpenedAt}, ${now})`,
+        updatedAt: now,
+      })
       .where(eq(taskRepos.id, targetRepoId));
   }
 }

@@ -138,6 +138,10 @@ export function startPrWatcherWorker() {
           // Conflicts override the raw checks status — once we've recorded
           // conflicts, keep that label until mergeable flips back.
           const effectiveChecksStatus = prData.mergeable === false ? "conflicts" : checksStatus;
+          const now = new Date();
+          const prOpenedAtInitialized = !taskRepo.prOpenedAt;
+          const checksStatusChanged =
+            taskRepo.prChecksStatus !== effectiveChecksStatus || taskRepo.ciStatus !== checksStatus;
 
           // Write all PR fields in one update. The reconciler reads these
           // from the snapshot to decide the next action.
@@ -147,8 +151,14 @@ export function startPrWatcherWorker() {
             prChecksStatus: effectiveChecksStatus,
             ciStatus: checksStatus,
             prReviewStatus: reviewStatus,
-            updatedAt: new Date(),
+            updatedAt: now,
           };
+          if (prOpenedAtInitialized) {
+            updates.prOpenedAt = now;
+          }
+          if (checksStatusChanged) {
+            updates.prChecksStatusChangedAt = now;
+          }
           // prReviewComments is still on the task row for now as it's used for resume context
           if (reviewComments && reviewComments !== task.prReviewComments) {
             await db
@@ -160,8 +170,8 @@ export function startPrWatcherWorker() {
           const statusChanged =
             taskRepo.prNumber !== prNumber ||
             taskRepo.prState !== updates.prState ||
-            taskRepo.prChecksStatus !== effectiveChecksStatus ||
-            taskRepo.ciStatus !== checksStatus ||
+            prOpenedAtInitialized ||
+            checksStatusChanged ||
             taskRepo.prReviewStatus !== reviewStatus;
 
           await db.update(taskRepos).set(updates).where(eq(taskRepos.id, taskRepo.id));
