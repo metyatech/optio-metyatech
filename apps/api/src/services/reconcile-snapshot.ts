@@ -124,8 +124,6 @@ async function buildRepoSnapshot(ref: RunRef): Promise<WorldSnapshot | null> {
 
   const repoRunStatus = run.status as RepoRunStatus;
   const aggregatedPr = aggregateTaskRepoPrStatus(taskReposResult, repoRunStatus.prReviewComments);
-  const runWithTaskRepoStatus = applyTaskRepoAggregateToRun(run, taskReposResult);
-
   const stallThresholdMs = parseIntEnv("OPTIO_STALL_THRESHOLD_MS", DEFAULT_STALL_THRESHOLD_MS);
   const heartbeat = computeHeartbeat(
     row.lastActivityAt ?? null,
@@ -141,7 +139,7 @@ async function buildRepoSnapshot(ref: RunRef): Promise<WorldSnapshot | null> {
 
   const snapshot: WorldSnapshot = {
     now,
-    run: runWithTaskRepoStatus,
+    run,
     pod: podResult,
     pr: aggregatedPr,
     taskRepos: taskReposResult,
@@ -194,23 +192,6 @@ async function countRecentAutoResumes(taskId: string): Promise<number> {
         )`,
     );
   return Number(count);
-}
-
-function applyTaskRepoAggregateToRun(run: Run, reposForTask: RepoStatus[]): Run {
-  if (run.kind !== "repo") return run;
-  const aggregate = aggregateRepoStatusFields(reposForTask);
-  if (!aggregate) return run;
-  return {
-    ...run,
-    status: {
-      ...run.status,
-      prUrl: aggregate.prUrl,
-      prNumber: aggregate.prNumber,
-      prState: aggregate.prState,
-      prChecksStatus: aggregate.prChecksStatus,
-      prReviewStatus: aggregate.prReviewStatus,
-    },
-  };
 }
 
 function aggregateTaskRepoPrStatus(

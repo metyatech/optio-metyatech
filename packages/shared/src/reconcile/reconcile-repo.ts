@@ -390,10 +390,9 @@ function decideFromPrStatus(snapshot: WorldSnapshot, allowFailComplete: boolean)
   }
 
   const canResume = status.state !== TaskState.FAILED;
-  const aggregate = aggregateStatusFromTaskRepos(snapshot.taskRepos);
   const prev = {
-    checks: aggregate?.prChecksStatus ?? status.prChecksStatus,
-    review: aggregate?.prReviewStatus ?? status.prReviewStatus,
+    checks: status.prChecksStatus,
+    review: status.prReviewStatus,
   };
 
   const autoResumeAllowed =

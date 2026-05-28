@@ -6,6 +6,7 @@ import type {
   RepoRunStatus,
   Run,
   PrStatus,
+  RepoStatus,
   DependencyObservation,
 } from "./types.js";
 import { TaskState } from "../types/task.js";
@@ -70,6 +71,26 @@ function makePr(overrides: Partial<PrStatus> = {}): PrStatus {
     checksStatus: "none",
     reviewStatus: "none",
     latestReviewComments: null,
+    ...overrides,
+  };
+}
+
+function makeTaskRepo(overrides: Partial<RepoStatus> = {}): RepoStatus {
+  return {
+    id: "task-repo-1",
+    repoUrl: "https://github.com/acme/repo",
+    repoBranch: "main",
+    prUrl: "https://github.com/acme/repo/pull/1",
+    prNumber: 1,
+    prState: "open",
+    prChecksStatus: "none",
+    prReviewStatus: "none",
+    ciStatus: null,
+    mergeStatus: null,
+    mergeOrder: null,
+    mergeError: null,
+    worktreeState: null,
+    podId: null,
     ...overrides,
   };
 }
@@ -595,6 +616,28 @@ describe("reconcileRepo — PR_OPENED", () => {
     if (action.kind === "resumeAgent") expect(action.resumeReason).toBe("ci_failure");
   });
 
+  it("CI failure from task_repos current status compares against persisted task status", () => {
+    const s = snapshot({}, openedStatus({ prChecksStatus: "passing" }), {
+      taskRepos: [makeTaskRepo({ prChecksStatus: "failing" })],
+      settings: {
+        stallThresholdMs: 300_000,
+        autoMerge: false,
+        cautiousMode: false,
+        autoResume: true,
+        reviewEnabled: false,
+        reviewTrigger: null,
+        offPeakOnly: false,
+        offPeakActive: false,
+        hasReviewSubtask: false,
+        maxAutoResumes: 10,
+        recentAutoResumeCount: 0,
+      },
+    });
+    const action = reconcileRepo(s);
+    expect(action.kind).toBe("resumeAgent");
+    if (action.kind === "resumeAgent") expect(action.resumeReason).toBe("ci_failure");
+  });
+
   it("CI just passed + on_ci_pass review → launchReview", () => {
     const s = snapshot({}, openedStatus({ prChecksStatus: "pending" }), {
       pr: makePr({ checksStatus: "passing" }),
@@ -613,6 +656,72 @@ describe("reconcileRepo — PR_OPENED", () => {
       },
     });
     expect(reconcileRepo(s).kind).toBe("launchReview");
+  });
+
+  it("CI pass from task_repos current status compares against persisted task status", () => {
+    const s = snapshot({}, openedStatus({ prChecksStatus: "pending" }), {
+      taskRepos: [makeTaskRepo({ prChecksStatus: "passing" })],
+      settings: {
+        stallThresholdMs: 300_000,
+        autoMerge: false,
+        cautiousMode: false,
+        autoResume: false,
+        reviewEnabled: true,
+        reviewTrigger: "on_ci_pass",
+        offPeakOnly: false,
+        offPeakActive: false,
+        hasReviewSubtask: false,
+        maxAutoResumes: 10,
+        recentAutoResumeCount: 0,
+      },
+    });
+    expect(reconcileRepo(s).kind).toBe("launchReview");
+  });
+
+  it("review changes from task_repos current status compares against persisted task status", () => {
+    const s = snapshot({}, openedStatus({ prReviewStatus: "none" }), {
+      taskRepos: [makeTaskRepo({ prReviewStatus: "changes_requested" })],
+      settings: {
+        stallThresholdMs: 300_000,
+        autoMerge: false,
+        cautiousMode: false,
+        autoResume: true,
+        reviewEnabled: true,
+        reviewTrigger: "on_ci_pass",
+        offPeakOnly: false,
+        offPeakActive: false,
+        hasReviewSubtask: false,
+        maxAutoResumes: 10,
+        recentAutoResumeCount: 0,
+      },
+    });
+    const action = reconcileRepo(s);
+    expect(action.kind).toBe("resumeAgent");
+    if (action.kind === "resumeAgent") expect(action.resumeReason).toBe("review");
+  });
+
+  it("steady task_repos PR status does not re-trigger edge actions", () => {
+    const s = snapshot(
+      {},
+      openedStatus({ prState: "open", prChecksStatus: "passing", prReviewStatus: "none" }),
+      {
+        taskRepos: [makeTaskRepo({ prChecksStatus: "passing" })],
+        settings: {
+          stallThresholdMs: 300_000,
+          autoMerge: false,
+          cautiousMode: false,
+          autoResume: false,
+          reviewEnabled: true,
+          reviewTrigger: "on_ci_pass",
+          offPeakOnly: false,
+          offPeakActive: false,
+          hasReviewSubtask: false,
+          maxAutoResumes: 10,
+          recentAutoResumeCount: 0,
+        },
+      },
+    );
+    expect(reconcileRepo(s).kind).toBe("noop");
   });
 
   it("first PR detection + on_pr review → launchReview", () => {
