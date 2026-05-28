@@ -255,6 +255,8 @@ export interface RepoStatus {
   prChecksStatus: "pending" | "passing" | "failing" | "none" | "conflicts" | null;
   prReviewStatus: "approved" | "changes_requested" | "pending" | "none" | null;
   ciStatus: string | null;
+  prOpenedAt: Date | null;
+  prChecksStatusChangedAt: Date | null;
   mergeStatus: "pending" | "merging" | "merged" | "failed" | "skipped" | null;
   mergeOrder: number | null;
   mergeError: string | null;
@@ -286,6 +288,7 @@ export interface WorldSnapshot {
     autoResume: boolean;
     reviewEnabled: boolean;
     reviewTrigger: "on_pr" | "on_ci_pass" | null;
+    reviewNoCiGraceMs: number;
     offPeakOnly: boolean;
     offPeakActive: boolean;
     hasReviewSubtask: boolean;
