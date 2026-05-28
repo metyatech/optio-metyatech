@@ -55,6 +55,8 @@ import { determineCheckStatus, determineReviewStatus } from "../workers/pr-watch
 import { checkBlockingSubtasks } from "./subtask-service.js";
 import { logger } from "../logger.js";
 
+const DEFAULT_REVIEW_NO_CI_GRACE_MS = 120_000;
+
 /**
  * Build a WorldSnapshot for a given run.
  *
@@ -160,6 +162,7 @@ async function buildRepoSnapshot(ref: RunRef): Promise<WorldSnapshot | null> {
         repoConfig?.reviewTrigger === "on_pr" || repoConfig?.reviewTrigger === "on_ci_pass"
           ? (repoConfig.reviewTrigger as "on_pr" | "on_ci_pass")
           : null,
+      reviewNoCiGraceMs: parseIntEnv("OPTIO_REVIEW_NO_CI_GRACE_MS", DEFAULT_REVIEW_NO_CI_GRACE_MS),
       offPeakOnly: repoConfig?.offPeakOnly ?? false,
       offPeakActive: offPeak.isOffPeak,
       hasReviewSubtask,
@@ -282,6 +285,8 @@ async function loadTaskRepos(taskId: string): Promise<RepoStatus[]> {
         ? row.prReviewStatus
         : null,
     ciStatus: row.ciStatus ?? null,
+    prOpenedAt: row.prOpenedAt ?? null,
+    prChecksStatusChangedAt: row.prChecksStatusChangedAt ?? null,
     mergeStatus:
       row.mergeStatus === "pending" ||
       row.mergeStatus === "merging" ||
@@ -589,6 +594,7 @@ async function buildStandaloneSnapshot(ref: RunRef): Promise<WorldSnapshot | nul
       autoResume: false,
       reviewEnabled: false,
       reviewTrigger: null,
+      reviewNoCiGraceMs: 0,
       offPeakOnly: false,
       offPeakActive: false,
       hasReviewSubtask: false,
@@ -741,6 +747,7 @@ async function buildPrReviewSnapshot(ref: RunRef): Promise<WorldSnapshot | null>
       autoResume: false,
       reviewEnabled: true,
       reviewTrigger: null,
+      reviewNoCiGraceMs: 0,
       offPeakOnly: false,
       offPeakActive: false,
       hasReviewSubtask: false,
@@ -943,6 +950,7 @@ async function buildPersistentAgentSnapshot(ref: RunRef): Promise<WorldSnapshot 
       autoResume: false,
       reviewEnabled: false,
       reviewTrigger: null,
+      reviewNoCiGraceMs: 0,
       offPeakOnly: false,
       offPeakActive: false,
       hasReviewSubtask: false,
