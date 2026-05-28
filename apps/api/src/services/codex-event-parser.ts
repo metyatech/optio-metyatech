@@ -64,6 +64,26 @@ export function parseCodexEvent(
     return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
   }
 
+  const fileChange = parseFileChange(event, payload);
+  if (fileChange) {
+    entries.push({
+      taskId,
+      timestamp,
+      sessionId,
+      type: "tool_use",
+      content: formatFileChangeSummary(fileChange.changes),
+      metadata: {
+        toolName: "Edit",
+        toolInput: {
+          changes: fileChange.changes,
+          ...(fileChange.status ? { status: fileChange.status } : {}),
+        },
+        toolUseId: fileChange.id,
+      },
+    });
+    return { entries, sessionId, isTerminal: isTerminalEvent(eventType) };
+  }
+
   const commandExecution = parseCommandExecution(event, payload);
   if (commandExecution) {
     entries.push({
@@ -310,6 +330,82 @@ function parseWebSearch(
   };
 }
 
+interface CodexFileChange {
+  path: string;
+  kind?: string;
+}
+
+function parseFileChange(
+  event: any,
+  payload: any,
+): { id?: string; changes: CodexFileChange[]; status?: string } | null {
+  const eventType = typeof event.type === "string" ? event.type : "";
+  const payloadType = typeof payload?.type === "string" ? payload.type : "";
+  if (payloadType !== "file_change" && eventType !== "file_change") return null;
+
+  const source = payloadType === "file_change" ? payload : event;
+  const changes = Array.isArray(source.changes)
+    ? source.changes
+        .map((change: any): CodexFileChange | null => {
+          const rawPath = stringifyValue(change?.path ?? change?.file_path ?? change?.file ?? "").trim();
+          if (!rawPath) return null;
+          const kind = stringifyValue(change?.kind ?? change?.type ?? "").trim() || undefined;
+          return { path: normalizeFileChangePath(rawPath), kind };
+        })
+        .filter((change: CodexFileChange | null): change is CodexFileChange => change != null)
+    : [];
+
+  if (changes.length === 0) return null;
+
+  return {
+    id: source.id ?? event.id,
+    changes,
+    status: typeof source.status === "string" ? source.status : undefined,
+  };
+}
+
+function normalizeFileChangePath(path: string): string {
+  const repoMarker = "/repo/";
+  const repoIndex = path.lastIndexOf(repoMarker);
+  if (repoIndex >= 0) return path.slice(repoIndex + repoMarker.length);
+  return path;
+}
+
+function formatFileChangeSummary(changes: CodexFileChange[]): string {
+  if (changes.length === 1) {
+    const change = changes[0];
+    return `${fileChangeVerb(change.kind)} ${change.path}`;
+  }
+
+  const preview = changes
+    .slice(0, 4)
+    .map((change) => `${fileChangeKindLabel(change.kind)} ${change.path}`)
+    .join(", ");
+  const suffix = changes.length > 4 ? `, +${changes.length - 4} more` : "";
+  return `Changed ${changes.length} files: ${preview}${suffix}`;
+}
+
+function fileChangeVerb(kind: string | undefined): string {
+  switch (kind) {
+    case "add":
+    case "create":
+      return "Add";
+    case "delete":
+    case "remove":
+      return "Delete";
+    case "rename":
+      return "Rename";
+    case "update":
+    case "modify":
+    default:
+      return "Edit";
+  }
+}
+
+function fileChangeKindLabel(kind: string | undefined): string {
+  return fileChangeVerb(kind).toLowerCase();
+}
+
 function parseCommandExecution(
   event: any,
   payload: any,
@@ -422,7 +518,8 @@ function extractText(value: unknown): string {
     type.includes("function_call") ||
     type.includes("tool_call") ||
     type === "command_execution" ||
-    type === "web_search"
+    type === "web_search" ||
+    type === "file_change"
   )
     return "";
 
