@@ -37,6 +37,7 @@ vi.mock("../db/schema.js", () => ({
     taskId: "taskId",
     repoUrl: "repoUrl",
     repoBranch: "repoBranch",
+    prOpenedAt: "prOpenedAt",
   },
 }));
 
@@ -191,6 +192,28 @@ describe("updateTaskPr", () => {
       expect.objectContaining({ prUrl: "https://github.com/o/r" }),
     );
   });
+
+  it("persists pr_opened_at as a PostgreSQL-compatible ISO timestamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-30T14:08:30.079Z"));
+    const mockDb = db as any;
+    mockDb.where
+      .mockReturnValueOnce(mockDb)
+      .mockResolvedValueOnce([{ id: "repo-1", repoUrl: "https://github.com/o/r" }])
+      .mockReturnValueOnce(mockDb);
+
+    try {
+      await updateTaskPr("t1", "https://github.com/o/r/pull/42");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const repoSet = vi.mocked(db.update(undefined as any).set).mock.calls.at(-1)?.[0] as {
+      prOpenedAt?: { queryChunks?: unknown[] };
+    };
+    expect(repoSet.prOpenedAt?.queryChunks).toContain("2026-05-30T14:08:30.079Z");
+    expect(repoSet.prOpenedAt?.queryChunks).not.toContainEqual(expect.any(Date));
+  });
 });
 
 describe("searchTasks", () => {
@@ -316,7 +339,7 @@ describe("updateTaskActivity", () => {
     // Use returning mock for the first chain, and a fresh where mock for the second.
     const origWhere = mockDb.where;
     let whereCallCount = 0;
-    mockDb.where = vi.fn().mockImplementation((...args: unknown[]) => {
+    mockDb.where = vi.fn().mockImplementation((..._args: unknown[]) => {
       whereCallCount++;
       if (whereCallCount <= 1) {
         // First where() — part of update chain, return db so .returning() works

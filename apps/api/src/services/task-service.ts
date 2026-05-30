@@ -457,6 +457,7 @@ export async function updateTaskPr(id: string, prUrl: string) {
   const prNumberMatch = prUrl.match(/\/(?:pull|merge_requests)\/(\d+)/);
   const prNumber = parsed?.prNumber ?? (prNumberMatch ? parseInt(prNumberMatch[1], 10) : undefined);
   const now = new Date();
+  const nowIso = now.toISOString();
   await db
     .update(tasks)
     .set({ prUrl, ...(prNumber != null && { prNumber }), updatedAt: now })
@@ -479,7 +480,7 @@ export async function updateTaskPr(id: string, prUrl: string) {
         prUrl,
         ...(prNumber != null && { prNumber }),
         prState: "open",
-        prOpenedAt: sql`COALESCE(${taskRepos.prOpenedAt}, ${now})`,
+        prOpenedAt: sql`COALESCE(${taskRepos.prOpenedAt}, ${nowIso}::timestamptz)`,
         updatedAt: now,
       })
       .where(eq(taskRepos.id, targetRepoId));
