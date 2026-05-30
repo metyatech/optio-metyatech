@@ -492,6 +492,22 @@ describe("reconcileRepo — RUNNING", () => {
     if (action.kind === "transition") expect(action.to).toBe(TaskState.PR_OPENED);
   });
 
+  it("existing PR during CI-fix run stays RUNNING", () => {
+    const s = snapshot(
+      {},
+      {
+        state: TaskState.RUNNING,
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        prChecksStatus: "failing",
+        prReviewStatus: "none",
+      },
+    );
+    const action = reconcileRepo(s);
+    expect(action.kind).toBe("noop");
+    expect(action.reason).toBe("running_healthy");
+  });
+
   it("stall detected → FAILED", () => {
     const s = snapshot(
       {},

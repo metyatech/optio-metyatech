@@ -5,3 +5,4 @@
 {"id":"l1adBAed","description":"Fix reconciler PR status edge detection for auto review","stage":"committed","createdAt":"2026-05-28T13:23:06.826Z","updatedAt":"2026-05-28T13:30:58.530Z","committedEventId":"kbNIWdUGfoQ7U7-B"}
 {"id":"A3H2Watw","description":"Adjust on_ci_pass review trigger for repositories without CI","stage":"committed","createdAt":"2026-05-28T22:32:28.069Z","updatedAt":"2026-05-28T23:11:21.434Z","committedEventId":"9doSS5zRBQg-PUN1"}
 {"id":"ft5P5d3N","description":"Fix task PR timestamp persistence failure","stage":"committed","createdAt":"2026-05-30T14:12:36.660Z","updatedAt":"2026-05-30T14:15:19.410Z","committedEventId":"nU8XhtFRItbTp__l"}
+{"id":"LxcUNNiD","description":"Prevent auto-resume loop on existing PR during CI fix","stage":"committed","createdAt":"2026-05-30T14:55:36.211Z","updatedAt":"2026-05-30T15:01:53.529Z","committedEventId":"qKjEG-Oh5fsx3zhm"}

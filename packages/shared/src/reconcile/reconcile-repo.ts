@@ -277,7 +277,14 @@ function decideRunning(snapshot: WorldSnapshot): RepoAction {
   // PR was just detected in agent output; promote. Only coding tasks follow
   // the PR lifecycle — pr_review tasks reference someone else's PR and never
   // enter PR_OPENED even if a prUrl is set on the row.
-  if (spec.taskType === "coding" && status.prUrl && status.state === TaskState.RUNNING) {
+  if (
+    spec.taskType === "coding" &&
+    status.prUrl &&
+    status.state === TaskState.RUNNING &&
+    status.prChecksStatus == null &&
+    status.prReviewStatus == null &&
+    status.prState == null
+  ) {
     return {
       kind: "transition",
       to: TaskState.PR_OPENED,
