@@ -594,6 +594,40 @@ describe("reconcileRepo — NEEDS_ATTENTION", () => {
     });
   });
 
+  it("preserves the passing CI edge when on_ci_pass review still needs to launch", () => {
+    const s = snapshot(
+      {},
+      {
+        state: TaskState.NEEDS_ATTENTION,
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prNumber: 1,
+        prState: "open",
+        prChecksStatus: "failing",
+        errorMessage: "ci_failing_needs_attention",
+      },
+      {
+        taskRepos: [makeTaskRepo({ prChecksStatus: "passing", ciStatus: "passing" })],
+        settings: {
+          reviewEnabled: true,
+          reviewTrigger: "on_ci_pass",
+          hasReviewSubtask: false,
+        },
+      },
+    );
+
+    const action = reconcileRepo(s);
+    expect(action).toEqual({
+      kind: "transition",
+      to: TaskState.PR_OPENED,
+      statusPatch: {
+        prReviewStatus: "none",
+        errorMessage: null,
+      },
+      trigger: "pr_attention_resolved",
+      reason: "needs_attention_pr_status_resolved",
+    });
+  });
+
   it("moves back to PR_OPENED when requested review changes are resolved externally", () => {
     const s = snapshot(
       {},

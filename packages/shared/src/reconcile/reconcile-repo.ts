@@ -343,13 +343,17 @@ function decideNeedsAttention(snapshot: WorldSnapshot): RepoAction {
     if (status.prReviewStatus !== pr.reviewStatus) prPatch.prReviewStatus = pr.reviewStatus;
 
     if (needsAttentionResolved(status, pr)) {
+      const statusPatch: Partial<RepoRunStatus> = {
+        ...prPatch,
+        errorMessage: null,
+      };
+      if (shouldPreserveCiPassReviewEdge(snapshot, status, pr)) {
+        delete statusPatch.prChecksStatus;
+      }
       return {
         kind: "transition",
         to: TaskState.PR_OPENED,
-        statusPatch: {
-          ...prPatch,
-          errorMessage: null,
-        },
+        statusPatch,
         trigger: "pr_attention_resolved",
         reason: "needs_attention_pr_status_resolved",
       };
@@ -367,6 +371,23 @@ function decideNeedsAttention(snapshot: WorldSnapshot): RepoAction {
   // Otherwise wait for user intent (resume / cancel). Reconciler does not
   // launch more work from NEEDS_ATTENTION without explicit intent.
   return { kind: "noop", reason: "awaiting_user_intent" };
+}
+
+function shouldPreserveCiPassReviewEdge(
+  snapshot: WorldSnapshot,
+  status: RepoRunStatus,
+  pr: NonNullable<WorldSnapshot["pr"]>,
+): boolean {
+  return (
+    snapshot.run.kind === "repo" &&
+    snapshot.run.spec.taskType === "coding" &&
+    pr.checksStatus === "passing" &&
+    status.prChecksStatus !== "passing" &&
+    pr.state === "open" &&
+    snapshot.settings.reviewEnabled &&
+    snapshot.settings.reviewTrigger === "on_ci_pass" &&
+    !snapshot.settings.hasReviewSubtask
+  );
 }
 
 function needsAttentionResolved(
