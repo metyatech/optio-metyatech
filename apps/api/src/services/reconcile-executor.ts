@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { tasks, workflowRuns, prReviews, persistentAgents } from "../db/schema.js";
+import { tasks, taskRepos, workflowRuns, prReviews, persistentAgents } from "../db/schema.js";
 import type {
   Action,
   PersistentAgentAction,
@@ -424,6 +424,10 @@ async function applyResumeAgent(
     return { status: "error", reason: msg, error: err };
   }
 
+  if (action.resumeReason === "ci_failure") {
+    await markCiRefreshPending(taskId);
+  }
+
   const { taskQueue } = await import("../workers/task-worker.js");
   await taskQueue.add(
     "process-task",
@@ -436,6 +440,27 @@ async function applyResumeAgent(
     { jobId: `${taskId}-${jobSuffix}-${Date.now()}` },
   );
   return { status: "applied", reason: `resume:${action.resumeReason}` };
+}
+
+async function markCiRefreshPending(taskId: string): Promise<void> {
+  const now = new Date();
+  await db
+    .update(tasks)
+    .set({
+      prChecksStatus: "pending",
+      updatedAt: now,
+    })
+    .where(eq(tasks.id, taskId));
+
+  await db
+    .update(taskRepos)
+    .set({
+      prChecksStatus: "pending",
+      ciStatus: "pending",
+      prChecksStatusChangedAt: now,
+      updatedAt: now,
+    })
+    .where(and(eq(taskRepos.taskId, taskId), sql`${taskRepos.prUrl} IS NOT NULL`));
 }
 
 async function applyLaunchReview(snapshot: WorldSnapshot): Promise<ExecuteOutcome> {

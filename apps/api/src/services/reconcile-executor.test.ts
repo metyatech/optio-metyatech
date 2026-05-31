@@ -33,6 +33,11 @@ vi.mock("../db/client.js", () => ({
 
 vi.mock("../db/schema.js", () => ({
   tasks: { id: "id", updatedAt: "updated_at" },
+  taskRepos: {
+    taskId: "task_id",
+    prUrl: "pr_url",
+    updatedAt: "updated_at",
+  },
   workflowRuns: { id: "id", updatedAt: "updated_at", state: "state" },
 }));
 
@@ -545,6 +550,8 @@ describe("reconcile-executor", () => {
 
   describe("resumeAgent", () => {
     it("transitions through NEEDS_ATTENTION → QUEUED and enqueues with prompt", async () => {
+      const chain = chainable([{ id: "task-1" }]);
+      mockDbUpdate.mockReturnValue(chain);
       mockTransitionTask.mockResolvedValue({ id: "task-1" });
       const snap = repoSnapshot();
       if (snap.run.kind !== "repo") throw new Error("fixture mismatch");
@@ -581,6 +588,20 @@ describe("reconcile-executor", () => {
         }),
         expect.any(Object),
       );
+      expect(mockDbUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: "id" }));
+      expect(mockDbUpdate).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task_id" }));
+      expect(chain.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prChecksStatus: "pending",
+        }),
+      );
+      expect(chain.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prChecksStatus: "pending",
+          ciStatus: "pending",
+          prChecksStatusChangedAt: expect.any(Date),
+        }),
+      );
     });
 
     it("uses fresh session for conflicts (no resumeSessionId)", async () => {
@@ -603,6 +624,7 @@ describe("reconcile-executor", () => {
         expect.objectContaining({ resumeSessionId: undefined }),
         expect.any(Object),
       );
+      expect(mockDbUpdate).not.toHaveBeenCalled();
     });
   });
 
