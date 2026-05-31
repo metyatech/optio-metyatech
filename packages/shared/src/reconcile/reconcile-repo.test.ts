@@ -563,6 +563,122 @@ describe("reconcileRepo — NEEDS_ATTENTION", () => {
     const s = snapshot({}, { state: TaskState.NEEDS_ATTENTION });
     expect(reconcileRepo(s).kind).toBe("noop");
   });
+
+  it("moves back to PR_OPENED when CI attention has resolved externally", () => {
+    const s = snapshot(
+      {},
+      {
+        state: TaskState.NEEDS_ATTENTION,
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prNumber: 1,
+        prState: "open",
+        prChecksStatus: "failing",
+        errorMessage: "ci_failing_needs_attention",
+      },
+      {
+        taskRepos: [makeTaskRepo({ prChecksStatus: "passing", ciStatus: "passing" })],
+      },
+    );
+
+    const action = reconcileRepo(s);
+    expect(action).toEqual({
+      kind: "transition",
+      to: TaskState.PR_OPENED,
+      statusPatch: {
+        prChecksStatus: "passing",
+        prReviewStatus: "none",
+        errorMessage: null,
+      },
+      trigger: "pr_attention_resolved",
+      reason: "needs_attention_pr_status_resolved",
+    });
+  });
+
+  it("moves back to PR_OPENED when requested review changes are resolved externally", () => {
+    const s = snapshot(
+      {},
+      {
+        state: TaskState.NEEDS_ATTENTION,
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prNumber: 1,
+        prState: "open",
+        prReviewStatus: "changes_requested",
+        errorMessage: "review_changes_needs_attention",
+      },
+      {
+        taskRepos: [makeTaskRepo({ prReviewStatus: "approved" })],
+      },
+    );
+
+    const action = reconcileRepo(s);
+    expect(action).toEqual({
+      kind: "transition",
+      to: TaskState.PR_OPENED,
+      statusPatch: {
+        prChecksStatus: "none",
+        prReviewStatus: "approved",
+        errorMessage: null,
+      },
+      trigger: "pr_attention_resolved",
+      reason: "needs_attention_pr_status_resolved",
+    });
+  });
+
+  it("moves back to PR_OPENED when no attention reason remains and PR is healthy", () => {
+    const s = snapshot(
+      {},
+      {
+        state: TaskState.NEEDS_ATTENTION,
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prNumber: 1,
+        prState: "open",
+        prChecksStatus: "passing",
+        prReviewStatus: "none",
+        errorMessage: null,
+      },
+      {
+        taskRepos: [makeTaskRepo({ prChecksStatus: "passing", ciStatus: "passing" })],
+      },
+    );
+
+    const action = reconcileRepo(s);
+    expect(action).toEqual({
+      kind: "transition",
+      to: TaskState.PR_OPENED,
+      statusPatch: {
+        errorMessage: null,
+      },
+      trigger: "pr_attention_resolved",
+      reason: "needs_attention_pr_status_resolved",
+    });
+  });
+
+  it("refreshes PR fields but keeps waiting when attention is still required", () => {
+    const s = snapshot(
+      {},
+      {
+        state: TaskState.NEEDS_ATTENTION,
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prNumber: 1,
+        prState: "open",
+        prChecksStatus: "pending",
+        errorMessage: "ci_failing_needs_attention",
+      },
+      {
+        taskRepos: [makeTaskRepo({ prChecksStatus: "failing", ciStatus: "failing" })],
+      },
+    );
+
+    const action = reconcileRepo(s);
+    expect(action).toEqual({
+      kind: "patchStatus",
+      statusPatch: {
+        prChecksStatus: "failing",
+        prReviewStatus: "none",
+      },
+      reason: "needs_attention_pr_status_fields_refresh",
+    });
+  });
 });
 
 // ── PR_OPENED ───────────────────────────────────────────────────────────────

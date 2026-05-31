@@ -48,6 +48,24 @@ export function determineReviewStatus(reviews: { state: string; body?: string }[
   return { status: "none", comments: "" };
 }
 
+export function shouldWakeTaskReconcilerForPrObservation(opts: {
+  taskState: string;
+  statusChanged: boolean;
+  prState: "open" | "closed" | "merged";
+  checksStatus: "none" | "pending" | "passing" | "failing" | "conflicts";
+  reviewStatus: string;
+}): boolean {
+  if (opts.statusChanged) return true;
+
+  return (
+    opts.taskState === "needs_attention" &&
+    opts.prState === "open" &&
+    opts.checksStatus !== "failing" &&
+    opts.checksStatus !== "conflicts" &&
+    opts.reviewStatus !== "changes_requested"
+  );
+}
+
 export const prWatcherQueue = new Queue("pr-watcher", { connection: connectionOpts });
 
 export function startPrWatcherWorker() {
@@ -84,8 +102,9 @@ export function startPrWatcherWorker() {
       }
 
       // --- Task PR watching ---
-      // Find all task repos with open PRs. Watch pr_opened tasks + failed tasks
-      // that have a PR (CI may recover, auto-merge may become possible).
+      // Find all task repos with open PRs. Watch pr_opened tasks, failed tasks,
+      // and PR-related needs_attention tasks so external CI/review recovery is
+      // observed and the reconciler can clear stale attention states.
       // Only watch coding tasks, NOT review subtasks (avoid recursive reviews).
       const openPrRepos = await db
         .select({
@@ -95,7 +114,7 @@ export function startPrWatcherWorker() {
         .from(taskRepos)
         .innerJoin(tasks, eq(taskRepos.taskId, tasks.id))
         .where(
-          sql`${tasks.state} IN ('pr_opened', 'failed') AND ${taskRepos.prUrl} IS NOT NULL AND (${tasks.taskType} = 'coding' OR ${tasks.taskType} IS NULL)`,
+          sql`${tasks.state} IN ('pr_opened', 'failed', 'needs_attention') AND ${taskRepos.prUrl} IS NOT NULL AND (${tasks.taskType} = 'coding' OR ${tasks.taskType} IS NULL)`,
         );
 
       for (const { taskRepo, task } of openPrRepos) {
@@ -176,7 +195,15 @@ export function startPrWatcherWorker() {
 
           await db.update(taskRepos).set(updates).where(eq(taskRepos.id, taskRepo.id));
 
-          if (statusChanged) {
+          if (
+            shouldWakeTaskReconcilerForPrObservation({
+              taskState: task.state,
+              statusChanged,
+              prState: updates.prState as "open" | "closed" | "merged",
+              checksStatus: effectiveChecksStatus,
+              reviewStatus,
+            })
+          ) {
             await enqueueReconcile(
               { kind: "repo", id: task.id },
               { reason: `pr_watch:${taskRepo.repoUrl}:${prData.merged ? "merged" : prData.state}` },

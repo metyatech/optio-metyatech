@@ -63,7 +63,7 @@ export function reconcileRepo(snapshot: WorldSnapshot): RepoAction {
     case TaskState.RUNNING:
       return decideRunning(snapshot);
     case TaskState.NEEDS_ATTENTION:
-      return decideNeedsAttention();
+      return decideNeedsAttention(snapshot);
     case TaskState.PR_OPENED:
       return decidePrOpened(snapshot);
     case TaskState.FAILED:
@@ -324,10 +324,77 @@ function decideRunning(snapshot: WorldSnapshot): RepoAction {
   return { kind: "noop", reason: "running_healthy" };
 }
 
-function decideNeedsAttention(): RepoAction {
-  // Waiting for user intent (resume / cancel). Reconciler cannot self-advance
-  // out of NEEDS_ATTENTION without explicit intent — that's the whole point.
+function decideNeedsAttention(snapshot: WorldSnapshot): RepoAction {
+  if (snapshot.run.kind !== "repo") return { kind: "noop", reason: "wrong_kind" };
+  const { status } = snapshot.run;
+  const pr = aggregatePrFromTaskRepos(snapshot.taskRepos, status.prReviewComments) ?? snapshot.pr;
+
+  // Terminal PR state is authoritative even while the task is waiting for
+  // attention.
+  if (pr?.merged || pr?.state === "closed") {
+    return decideFromPrStatus(snapshot, /*allowFailComplete*/ true);
+  }
+
+  if (pr?.state === "open") {
+    const effectiveChecks = effectiveChecksStatus(pr, status);
+    const prPatch: Partial<RepoRunStatus> = {};
+    if (status.prState !== pr.state) prPatch.prState = pr.state;
+    if (status.prChecksStatus !== effectiveChecks) prPatch.prChecksStatus = effectiveChecks;
+    if (status.prReviewStatus !== pr.reviewStatus) prPatch.prReviewStatus = pr.reviewStatus;
+
+    if (needsAttentionResolved(status, pr)) {
+      return {
+        kind: "transition",
+        to: TaskState.PR_OPENED,
+        statusPatch: {
+          ...prPatch,
+          errorMessage: null,
+        },
+        trigger: "pr_attention_resolved",
+        reason: "needs_attention_pr_status_resolved",
+      };
+    }
+
+    if (Object.keys(prPatch).length > 0) {
+      return {
+        kind: "patchStatus",
+        statusPatch: prPatch,
+        reason: "needs_attention_pr_status_fields_refresh",
+      };
+    }
+  }
+
+  // Otherwise wait for user intent (resume / cancel). Reconciler does not
+  // launch more work from NEEDS_ATTENTION without explicit intent.
   return { kind: "noop", reason: "awaiting_user_intent" };
+}
+
+function needsAttentionResolved(
+  status: RepoRunStatus,
+  pr: NonNullable<WorldSnapshot["pr"]>,
+): boolean {
+  if (
+    !status.errorMessage &&
+    pr.checksStatus !== "failing" &&
+    pr.mergeable !== false &&
+    pr.reviewStatus !== "changes_requested"
+  ) {
+    return true;
+  }
+
+  if (
+    (status.errorMessage === "ci_failing_needs_attention" ||
+      status.errorMessage === "pr_conflicts_needs_attention") &&
+    pr.checksStatus !== "failing" &&
+    pr.mergeable !== false
+  ) {
+    return true;
+  }
+
+  return (
+    status.errorMessage === "review_changes_needs_attention" &&
+    pr.reviewStatus !== "changes_requested"
+  );
 }
 
 function decidePrOpened(snapshot: WorldSnapshot): RepoAction {

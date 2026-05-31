@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { determineCheckStatus, determineReviewStatus } from "./pr-watcher-worker.js";
+import {
+  determineCheckStatus,
+  determineReviewStatus,
+  shouldWakeTaskReconcilerForPrObservation,
+} from "./pr-watcher-worker.js";
 
 describe("determineCheckStatus", () => {
   it("returns none for empty check runs", () => {
@@ -75,5 +79,52 @@ describe("determineReviewStatus", () => {
         { state: "APPROVED", body: "Fixed" },
       ]),
     ).toEqual({ status: "approved", comments: "" });
+  });
+});
+
+describe("shouldWakeTaskReconcilerForPrObservation", () => {
+  it("wakes whenever observed PR status changed", () => {
+    expect(
+      shouldWakeTaskReconcilerForPrObservation({
+        taskState: "pr_opened",
+        statusChanged: true,
+        prState: "open",
+        checksStatus: "passing",
+        reviewStatus: "none",
+      }),
+    ).toBe(true);
+  });
+
+  it("wakes unchanged needs_attention tasks when the PR no longer needs attention", () => {
+    expect(
+      shouldWakeTaskReconcilerForPrObservation({
+        taskState: "needs_attention",
+        statusChanged: false,
+        prState: "open",
+        checksStatus: "passing",
+        reviewStatus: "none",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not repeatedly wake unchanged needs_attention tasks that still need action", () => {
+    expect(
+      shouldWakeTaskReconcilerForPrObservation({
+        taskState: "needs_attention",
+        statusChanged: false,
+        prState: "open",
+        checksStatus: "failing",
+        reviewStatus: "none",
+      }),
+    ).toBe(false);
+    expect(
+      shouldWakeTaskReconcilerForPrObservation({
+        taskState: "needs_attention",
+        statusChanged: false,
+        prState: "open",
+        checksStatus: "passing",
+        reviewStatus: "changes_requested",
+      }),
+    ).toBe(false);
   });
 });

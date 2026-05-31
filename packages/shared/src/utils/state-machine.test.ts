@@ -141,6 +141,13 @@ describe("state-machine", () => {
       expect(state).toBe(TaskState.QUEUED);
     });
 
+    it("supports needs_attention → pr_opened when PR attention resolves externally", () => {
+      let state = TaskState.PR_OPENED;
+      state = transition(state, TaskState.NEEDS_ATTENTION);
+      state = transition(state, TaskState.PR_OPENED);
+      expect(state).toBe(TaskState.PR_OPENED);
+    });
+
     it("supports pr_opened → needs_attention → queued for review changes", () => {
       let state = TaskState.PR_OPENED;
       state = transition(state, TaskState.NEEDS_ATTENTION);
