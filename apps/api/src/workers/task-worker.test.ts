@@ -27,6 +27,7 @@ import {
   configureCodexChatGptAuth,
   hasAgentStartupEvidence,
   inferExitCode,
+  shouldCompleteAgentRun,
   shouldRunPlanningMode,
   shouldEscalateNoPr,
   validateCodexAuthJson,
@@ -608,6 +609,20 @@ describe("shouldEscalateNoPr", () => {
         detectedPrUrl: "https://github.com/org/repo/pull/1",
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldCompleteAgentRun", () => {
+  it("does not treat a failed review task as a successful completion", () => {
+    expect(shouldCompleteAgentRun({ resultSuccess: false, isReviewTask: true })).toBe(false);
+  });
+
+  it("allows a successful review task to complete", () => {
+    expect(shouldCompleteAgentRun({ resultSuccess: true, isReviewTask: true })).toBe(true);
+  });
+
+  it("keeps coding task completion tied to agent success", () => {
+    expect(shouldCompleteAgentRun({ resultSuccess: false, isReviewTask: false })).toBe(false);
   });
 });
 

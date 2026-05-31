@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const serviceMocks = vi.hoisted(() => ({
+  getRepoByUrl: vi.fn(),
+  getGitPlatformForRepo: vi.fn(),
+  enqueueReconcile: vi.fn(),
+}));
+
 // Mock dependencies before importing the service
 vi.mock("../db/client.js", () => ({
   db: {
@@ -19,6 +25,24 @@ vi.mock("../db/schema.js", () => ({
     state: "tasks.state",
     taskType: "tasks.task_type",
     repoUrl: "tasks.repo_url",
+    prUrl: "tasks.pr_url",
+    prNumber: "tasks.pr_number",
+    prState: "tasks.pr_state",
+    prChecksStatus: "tasks.pr_checks_status",
+    prReviewStatus: "tasks.pr_review_status",
+    prReviewComments: "tasks.pr_review_comments",
+    updatedAt: "tasks.updated_at",
+  },
+  taskRepos: {
+    id: "task_repos.id",
+    taskId: "task_repos.task_id",
+    prUrl: "task_repos.pr_url",
+    prNumber: "task_repos.pr_number",
+    prState: "task_repos.pr_state",
+    prChecksStatus: "task_repos.pr_checks_status",
+    ciStatus: "task_repos.ci_status",
+    prReviewStatus: "task_repos.pr_review_status",
+    updatedAt: "task_repos.updated_at",
   },
   repos: {
     repoUrl: "repos.repo_url",
@@ -52,6 +76,18 @@ vi.mock("../workers/task-worker.js", () => ({
   },
 }));
 
+vi.mock("./repo-service.js", () => ({
+  getRepoByUrl: serviceMocks.getRepoByUrl,
+}));
+
+vi.mock("./git-token-service.js", () => ({
+  getGitPlatformForRepo: serviceMocks.getGitPlatformForRepo,
+}));
+
+vi.mock("./reconcile-queue.js", () => ({
+  enqueueReconcile: serviceMocks.enqueueReconcile,
+}));
+
 vi.mock("../logger.js", () => ({
   logger: {
     info: vi.fn(),
@@ -77,9 +113,73 @@ import {
   getPipelineProgress,
 } from "./subtask-service.js";
 
+function mockCompletedReviewSubtaskQueries() {
+  let selectCallCount = 0;
+  (db.select as any) = vi.fn().mockImplementation(() => ({
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          return Promise.resolve([{ id: "review-1", state: "completed", blocksParent: true }]);
+        }
+        if (selectCallCount === 2) {
+          return Promise.resolve([{ id: "review-1", state: "completed", taskType: "review" }]);
+        }
+        return Promise.resolve([]);
+      }),
+    }),
+  }));
+}
+
+function mockDbUpdates() {
+  (db.update as any) = vi.fn().mockReturnValue({
+    set: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue(undefined),
+    }),
+  });
+}
+
+function mockObservedPr(opts: {
+  prNumber?: number;
+  reviews?: { state: string; body?: string }[];
+  checks?: { status: string; conclusion: string | null }[];
+  mergeable?: boolean | null;
+  merged?: boolean;
+  prState?: "open" | "closed";
+}) {
+  const mergePullRequest = vi.fn().mockResolvedValue(undefined);
+  serviceMocks.getGitPlatformForRepo.mockResolvedValue({
+    platform: {
+      getPullRequest: vi.fn().mockResolvedValue({
+        number: opts.prNumber ?? 42,
+        state: opts.prState ?? "open",
+        merged: opts.merged ?? false,
+        mergeable: opts.mergeable ?? true,
+        headSha: "sha-1",
+      }),
+      getCIChecks: vi
+        .fn()
+        .mockResolvedValue(opts.checks ?? [{ status: "completed", conclusion: "success" }]),
+      getReviews: vi.fn().mockResolvedValue(opts.reviews ?? [{ state: "APPROVED", body: "LGTM" }]),
+      mergePullRequest,
+    },
+    ri: {
+      platform: "github",
+      host: "github.com",
+      owner: "owner",
+      repo: "repo",
+      apiBaseUrl: "https://api.github.com",
+    },
+  });
+  return mergePullRequest;
+}
+
 describe("subtask-service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    serviceMocks.getRepoByUrl.mockReset();
+    serviceMocks.getGitPlatformForRepo.mockReset();
+    serviceMocks.enqueueReconcile.mockReset();
   });
 
   describe("createSubtask", () => {
@@ -445,7 +545,7 @@ describe("subtask-service", () => {
       expect(taskService.transitionTask).not.toHaveBeenCalled();
     });
 
-    it("attempts auto-merge when review approved and autoMerge enabled", async () => {
+    it("attempts auto-merge only when the platform review is approved and autoMerge is enabled", async () => {
       vi.mocked(taskService.getTask)
         .mockResolvedValueOnce({
           id: "review-1",
@@ -456,62 +556,20 @@ describe("subtask-service", () => {
           state: "pr_opened",
           prUrl: "https://github.com/owner/repo/pull/42",
           repoUrl: "https://github.com/owner/repo",
+          workspaceId: null,
         } as any);
 
-      // checkBlockingSubtasks: all complete
-      let selectCallCount = 0;
-      (db.select as any) = vi.fn().mockImplementation(() => ({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockImplementation(() => {
-            selectCallCount++;
-            if (selectCallCount === 1) {
-              // checkBlockingSubtasks
-              return Promise.resolve([{ id: "review-1", state: "completed", blocksParent: true }]);
-            }
-            if (selectCallCount === 2) {
-              // review subtasks query
-              return Promise.resolve([{ id: "review-1", state: "completed", taskType: "review" }]);
-            }
-            if (selectCallCount === 3) {
-              // getDefaultWorkspaceId — no default workspace in test
-              return Promise.resolve([]);
-            }
-            if (selectCallCount === 4) {
-              // getRepoByUrl isNull fallback — repo config query
-              return Promise.resolve([{ autoMerge: true }]);
-            }
-            return Promise.resolve([]);
-          }),
-        }),
-      }));
-
-      // Mock github-token-service for token retrieval
-      vi.doMock("./github-token-service.js", () => ({
-        getGitHubToken: vi.fn().mockResolvedValue("gh-token-123"),
-      }));
-
-      // Mock fetch for merge API call
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({}),
+      mockCompletedReviewSubtaskQueries();
+      mockDbUpdates();
+      const mergePullRequest = mockObservedPr({
+        reviews: [{ state: "APPROVED", body: "LGTM" }],
       });
-      globalThis.fetch = mockFetch;
+      serviceMocks.getRepoByUrl.mockResolvedValue({ autoMerge: true, cautiousMode: false });
 
       await onSubtaskComplete("review-1");
 
-      // Should have called GitHub merge API
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://api.github.com/repos/owner/repo/pulls/42/merge",
-        expect.objectContaining({
-          method: "PUT",
-          headers: expect.objectContaining({
-            Authorization: "Bearer gh-token-123",
-          }),
-          body: JSON.stringify({ merge_method: "squash" }),
-        }),
-      );
+      expect(mergePullRequest).toHaveBeenCalledWith(expect.any(Object), 42, "squash");
 
-      // Should transition parent to completed
       expect(taskService.transitionTask).toHaveBeenCalledWith(
         "parent-1",
         "completed",
@@ -531,48 +589,109 @@ describe("subtask-service", () => {
           state: "pr_opened",
           prUrl: "https://github.com/owner/repo/pull/10",
           repoUrl: "https://github.com/owner/repo",
+          workspaceId: null,
         } as any);
 
-      let selectCallCount = 0;
-      (db.select as any) = vi.fn().mockImplementation(() => ({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockImplementation(() => {
-            selectCallCount++;
-            if (selectCallCount === 1) {
-              return Promise.resolve([{ id: "review-1", state: "completed", blocksParent: true }]);
-            }
-            if (selectCallCount === 2) {
-              return Promise.resolve([{ id: "review-1", state: "completed", taskType: "review" }]);
-            }
-            if (selectCallCount === 3) {
-              // getDefaultWorkspaceId — no default workspace in test
-              return Promise.resolve([]);
-            }
-            if (selectCallCount === 4) {
-              // getRepoByUrl isNull fallback — repo config query
-              return Promise.resolve([{ autoMerge: true }]);
-            }
-            return Promise.resolve([]);
-          }),
-        }),
-      }));
-
-      vi.doMock("./secret-service.js", () => ({
-        retrieveSecret: vi.fn().mockResolvedValue("gh-token"),
-      }));
-
-      // Mock fetch returning failure
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 405,
-        json: () => Promise.resolve({ message: "merge not allowed" }),
+      mockCompletedReviewSubtaskQueries();
+      mockDbUpdates();
+      serviceMocks.getRepoByUrl.mockResolvedValue({ autoMerge: true, cautiousMode: false });
+      const mergePullRequest = mockObservedPr({
+        prNumber: 10,
+        reviews: [{ state: "APPROVED", body: "LGTM" }],
       });
+      mergePullRequest.mockRejectedValueOnce(new Error("merge not allowed"));
 
-      // Should not throw
       await onSubtaskComplete("review-1");
 
-      // Should NOT transition parent (merge failed)
       expect(taskService.transitionTask).not.toHaveBeenCalled();
+    });
+
+    it("does not auto-merge when the review subtask completed without platform approval", async () => {
+      vi.mocked(taskService.getTask)
+        .mockResolvedValueOnce({
+          id: "review-1",
+          parentTaskId: "parent-1",
+        } as any)
+        .mockResolvedValueOnce({
+          id: "parent-1",
+          state: "pr_opened",
+          prUrl: "https://github.com/owner/repo/pull/5",
+          repoUrl: "https://github.com/owner/repo",
+          workspaceId: null,
+        } as any);
+
+      mockCompletedReviewSubtaskQueries();
+      mockDbUpdates();
+      const mergePullRequest = mockObservedPr({
+        prNumber: 5,
+        reviews: [],
+      });
+
+      await onSubtaskComplete("review-1");
+
+      expect(mergePullRequest).not.toHaveBeenCalled();
+      expect(taskService.transitionTask).toHaveBeenCalledWith(
+        "parent-1",
+        "needs_attention",
+        "review_missing_approval",
+        "Review task completed but no approved platform review was observed",
+      );
+    });
+
+    it("does not merge directly when platform review requests changes", async () => {
+      vi.mocked(taskService.getTask)
+        .mockResolvedValueOnce({
+          id: "review-1",
+          parentTaskId: "parent-1",
+        } as any)
+        .mockResolvedValueOnce({
+          id: "parent-1",
+          state: "pr_opened",
+          prUrl: "https://github.com/owner/repo/pull/6",
+          repoUrl: "https://github.com/owner/repo",
+          workspaceId: null,
+        } as any);
+
+      mockCompletedReviewSubtaskQueries();
+      mockDbUpdates();
+      const mergePullRequest = mockObservedPr({
+        prNumber: 6,
+        reviews: [{ state: "CHANGES_REQUESTED", body: "Fix this" }],
+      });
+
+      await onSubtaskComplete("review-1");
+
+      expect(mergePullRequest).not.toHaveBeenCalled();
+      expect(serviceMocks.enqueueReconcile).toHaveBeenCalledWith(
+        { kind: "repo", id: "parent-1" },
+        { reason: "review_completed_changes_requested" },
+      );
+    });
+
+    it("marks parent needs_attention when a review subtask fails", async () => {
+      vi.mocked(taskService.getTask)
+        .mockResolvedValueOnce({
+          id: "review-1",
+          parentTaskId: "parent-1",
+          taskType: "review",
+          state: "failed",
+          errorMessage: "Agent exited with code 1",
+        } as any)
+        .mockResolvedValueOnce({
+          id: "parent-1",
+          state: "pr_opened",
+          repoUrl: "https://github.com/owner/repo",
+        } as any);
+
+      await onSubtaskComplete("review-1");
+
+      expect(taskService.transitionTask).toHaveBeenCalledWith(
+        "parent-1",
+        "needs_attention",
+        "review_failed",
+        "Review agent failed: Agent exited with code 1",
+      );
+      expect(serviceMocks.getGitPlatformForRepo).not.toHaveBeenCalled();
     });
 
     it("skips auto-merge when autoMerge is disabled on repo", async () => {
@@ -586,39 +705,25 @@ describe("subtask-service", () => {
           state: "pr_opened",
           prUrl: "https://github.com/owner/repo/pull/5",
           repoUrl: "https://github.com/owner/repo",
+          workspaceId: null,
         } as any);
 
-      let selectCallCount = 0;
-      (db.select as any) = vi.fn().mockImplementation(() => ({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockImplementation(() => {
-            selectCallCount++;
-            if (selectCallCount === 1) {
-              return Promise.resolve([{ id: "review-1", state: "completed", blocksParent: true }]);
-            }
-            if (selectCallCount === 2) {
-              return Promise.resolve([{ id: "review-1", state: "completed", taskType: "review" }]);
-            }
-            if (selectCallCount === 3) {
-              // getDefaultWorkspaceId — no default workspace in test
-              return Promise.resolve([]);
-            }
-            if (selectCallCount === 4) {
-              // getRepoByUrl isNull fallback — autoMerge is false
-              return Promise.resolve([{ autoMerge: false }]);
-            }
-            return Promise.resolve([]);
-          }),
-        }),
-      }));
-
-      globalThis.fetch = vi.fn();
+      mockCompletedReviewSubtaskQueries();
+      mockDbUpdates();
+      serviceMocks.getRepoByUrl.mockResolvedValue({ autoMerge: false, cautiousMode: false });
+      const mergePullRequest = mockObservedPr({
+        prNumber: 5,
+        reviews: [{ state: "APPROVED", body: "LGTM" }],
+      });
 
       await onSubtaskComplete("review-1");
 
-      // Should not call fetch (no merge attempt)
-      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(mergePullRequest).not.toHaveBeenCalled();
       expect(taskService.transitionTask).not.toHaveBeenCalled();
+      expect(serviceMocks.enqueueReconcile).toHaveBeenCalledWith(
+        { kind: "repo", id: "parent-1" },
+        { reason: "review_completed_auto_merge_not_ready" },
+      );
     });
 
     it("auto-queues next step when a pipeline step completes", async () => {

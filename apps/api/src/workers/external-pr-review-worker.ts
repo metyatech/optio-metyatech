@@ -25,7 +25,7 @@ import { launchPrReview, isOptioAuthoredPr } from "../services/pr-review-service
 import { logger } from "../logger.js";
 import { getBullMQConnectionOptions } from "../services/redis-config.js";
 import { instrumentWorkerProcessor } from "../telemetry/instrument-worker.js";
-import { determineCheckStatus } from "./pr-watcher-worker.js";
+import { determineCheckStatus } from "../services/pr-status-utils.js";
 
 const connectionOpts = getBullMQConnectionOptions();
 

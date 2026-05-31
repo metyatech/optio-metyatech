@@ -3,7 +3,7 @@ import {
   determineCheckStatus,
   determineReviewStatus,
   shouldWakeTaskReconcilerForPrObservation,
-} from "./pr-watcher-worker.js";
+} from "../services/pr-status-utils.js";
 
 describe("determineCheckStatus", () => {
   it("returns none for empty check runs", () => {

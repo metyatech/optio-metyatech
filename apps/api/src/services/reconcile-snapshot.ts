@@ -51,7 +51,7 @@ import type {
   PersistentAgentControlIntent,
 } from "@optio/shared";
 import { getGitPlatformForRepo } from "./git-token-service.js";
-import { determineCheckStatus, determineReviewStatus } from "../workers/pr-watcher-worker.js";
+import { determineCheckStatus, determineReviewStatus } from "./pr-status-utils.js";
 import { checkBlockingSubtasks } from "./subtask-service.js";
 import { logger } from "../logger.js";
 

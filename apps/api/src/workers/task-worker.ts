@@ -1274,7 +1274,12 @@ export function startTaskWorker() {
             detectedPrUrl,
           );
           log.info({ prUrl: detectedPrUrl }, "PR opened");
-        } else if (result.success || isReviewTask) {
+        } else if (
+          shouldCompleteAgentRun({
+            resultSuccess: result.success,
+            isReviewTask,
+          })
+        ) {
           // External PR reviews no longer run here — they execute under
           // pr_review_runs via pr-review-worker.ts. Subtask reviews
           // (`taskType === "review"`) still flow through this path and
@@ -1974,6 +1979,16 @@ export function shouldEscalateNoPr(opts: {
   if (!opts.hasRepoUrl) return false;
   if (opts.detectedPrUrl) return false;
   return true;
+}
+
+export function shouldCompleteAgentRun(opts: {
+  resultSuccess: boolean;
+  isReviewTask: boolean;
+}): boolean {
+  // Review tasks block their parent, but they do not get weaker execution
+  // semantics. A failed review agent is not an approved review.
+  if (opts.isReviewTask) return opts.resultSuccess;
+  return opts.resultSuccess;
 }
 
 export function shouldRunPlanningMode(opts: {
