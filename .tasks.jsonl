@@ -9,4 +9,4 @@
 {"id":"LMkMc2s3","description":"Investigate why CI failure auto-response did not run for task 3c40c66b-ae65-4a46-9819-1fd0ad75c0ef","stage":"committed","createdAt":"2026-05-31T05:25:41.669Z","updatedAt":"2026-05-31T05:33:13.390Z","committedEventId":"7pu-Se5VSQ1oihbL"}
 {"id":"geYg5FFo","description":"Fix on_ci_pass review launch after needs_attention recovery consumes passing edge","stage":"committed","createdAt":"2026-05-31T06:24:17.986Z","updatedAt":"2026-05-31T06:32:32.977Z","committedEventId":"zRLTWNtNkA0oJhqo"}
 {"id":"UARslKL_","description":"Reject failed review subtasks before auto-merge approval","stage":"committed","createdAt":"2026-05-31T06:45:42.433Z","updatedAt":"2026-05-31T06:57:36.173Z","committedEventId":"nYU2Fq-D5EVDj1Jh"}
-{"id":"Y8dRVbWl","description":"Add PowerShell to task execution pod image","stage":"in-progress","createdAt":"2026-05-31T06:47:19.199Z","updatedAt":"2026-05-31T06:47:19.199Z"}
+{"id":"Y8dRVbWl","description":"Add PowerShell to task execution pod image","stage":"committed","createdAt":"2026-05-31T06:47:19.199Z","updatedAt":"2026-05-31T07:17:28.496Z","committedEventId":"RxmFpud7HpzSZzTe"}

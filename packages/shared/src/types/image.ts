@@ -2,7 +2,8 @@ export const PRESET_IMAGES = {
   base: {
     tag: "optio-base:latest",
     label: "Base",
-    description: "Git, Node.js, Python 3, gh CLI, glab CLI, Claude Code. Minimal footprint.",
+    description:
+      "Git, Node.js, Python 3, PowerShell 7, gh CLI, glab CLI, Claude Code. Minimal footprint.",
     languages: [],
   },
   node: {

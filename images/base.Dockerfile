@@ -37,6 +37,16 @@ RUN ARCH_RAW=$(dpkg --print-architecture) \
     && /tmp/aws/install \
     && rm -rf /tmp/awscliv2.zip /tmp/aws
 
+# PowerShell 7
+RUN . /etc/os-release \
+    && wget -q "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb" -O /tmp/packages-microsoft-prod.deb \
+    && dpkg -i /tmp/packages-microsoft-prod.deb \
+    && rm /tmp/packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y powershell \
+    && pwsh -NoLogo -NoProfile -Command 'if ($PSVersionTable.PSVersion.Major -lt 7) { throw "PowerShell 7 required" }' \
+    && rm -rf /var/lib/apt/lists/*
+
 # Node.js 22 (needed for Claude Code)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \

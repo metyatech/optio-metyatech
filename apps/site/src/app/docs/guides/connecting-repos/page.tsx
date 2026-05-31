@@ -106,7 +106,10 @@ export default function ConnectingReposPage() {
           </thead>
           <tbody className="divide-y divide-border/50">
             {[
-              ["base", "Git, common CLI tools, Claude Code, Copilot, Gemini, OpenCode"],
+              [
+                "base",
+                "Git, PowerShell 7, common CLI tools, Claude Code, Copilot, Gemini, OpenCode",
+              ],
               ["node", "Base + Node.js, npm, pnpm, yarn"],
               ["python", "Base + Python, pip, poetry, uv"],
               ["go", "Base + Go toolchain"],

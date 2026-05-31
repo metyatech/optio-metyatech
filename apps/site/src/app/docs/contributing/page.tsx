@@ -130,6 +130,7 @@ pnpm dev:api          # Fastify API on :4000
 pnpm dev:web          # Next.js on :3100
 
 # Quality checks (same as CI + pre-commit hooks)
+pnpm verify           # Run format, lint, typecheck, and tests
 pnpm format:check     # Check formatting (Prettier)
 pnpm format           # Auto-fix formatting
 pnpm lint             # Lint with ESLint

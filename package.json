@@ -15,6 +15,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "turbo typecheck",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm turbo test",
     "db:generate": "turbo db:generate",
     "db:migrate": "turbo db:migrate",
     "format": "prettier --write .",
