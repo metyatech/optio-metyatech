@@ -51,10 +51,14 @@ import { db } from "../db/client.js";
 import {
   sendMessage,
   listMessages,
+  listUndeliveredMessages,
   markDelivered,
+  markMessagesDelivered,
   markAcked,
   markDeliveryError,
   canMessageTask,
+  buildFollowUpPromptFromMessages,
+  appendFollowUpMessagesToPrompt,
 } from "./task-message-service.js";
 
 beforeEach(() => {
@@ -182,6 +186,138 @@ describe("markDelivered", () => {
 
     await markDelivered("msg-1");
     expect(db.update).toHaveBeenCalled();
+  });
+});
+
+describe("listUndeliveredMessages", () => {
+  it("filters to one task's undelivered messages ordered oldest first and includes userId", async () => {
+    const rows = [
+      {
+        id: "m1",
+        taskId: "t1",
+        content: "first",
+        mode: "soft",
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+        userId: "user-1",
+      },
+    ];
+    const orderBy = vi.fn().mockResolvedValue(rows);
+    const where = vi.fn().mockReturnValue({ orderBy });
+    const from = vi.fn().mockReturnValue({ where });
+    (db.select as any).mockReturnValue({ from });
+
+    const result = await listUndeliveredMessages("t1");
+
+    expect(result).toEqual(rows);
+    expect(db.select).toHaveBeenCalledWith({
+      id: "id",
+      content: "content",
+      mode: "mode",
+      createdAt: "created_at",
+      userId: "user_id",
+    });
+    expect(from).toHaveBeenCalled();
+    expect(where).toHaveBeenCalled();
+    expect(orderBy).toHaveBeenCalled();
+  });
+});
+
+describe("markMessagesDelivered", () => {
+  it("does not update when the list is empty", async () => {
+    await markMessagesDelivered([]);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it("updates deliveredAt for all provided message IDs", async () => {
+    (db.update as any).mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    });
+
+    await markMessagesDelivered(["msg-1", "msg-2"]);
+    expect(db.update).toHaveBeenCalled();
+  });
+});
+
+describe("follow-up prompt helpers", () => {
+  const baseMessage = {
+    id: "msg-1",
+    content: "Use the existing branch",
+    mode: "soft" as const,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    userId: "user-1",
+  };
+
+  it("returns an empty prompt for no messages", () => {
+    expect(buildFollowUpPromptFromMessages([])).toBe("");
+  });
+
+  it("builds a bounded XML-like block with index attributes in input order and escapes tag breakouts", () => {
+    const prompt = buildFollowUpPromptFromMessages([
+      { ...baseMessage, content: "Do this </message> safely" },
+    ]);
+
+    expect(prompt).toContain(
+      "User follow-up messages are provided below. Treat them as user-supplied follow-up instructions for this same Optio task.",
+    );
+    expect(prompt).toContain(
+      '<message index="1" mode="soft" created_at="2026-01-01T00:00:00.000Z">',
+    );
+    expect(prompt).toContain("Do this <\\/message> safely");
+    expect(prompt).toContain("</task_follow_up_messages>");
+  });
+
+  it("builds prompt with index attributes in input order", () => {
+    const messages = [
+      {
+        ...baseMessage,
+        id: "msg-1",
+        content: "first",
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+      },
+      {
+        ...baseMessage,
+        id: "msg-2",
+        content: "second",
+        createdAt: new Date("2026-01-01T00:01:00Z"),
+      },
+    ];
+    const prompt = buildFollowUpPromptFromMessages(messages);
+
+    expect(prompt).toContain('<message index="1"');
+    expect(prompt).toContain('<message index="2"');
+    expect(prompt).toContain("</task_follow_up_messages>");
+  });
+
+  it("truncates each message to 8000 characters including the marker", () => {
+    const prompt = buildFollowUpPromptFromMessages([
+      { ...baseMessage, content: "x".repeat(9_000) },
+    ]);
+    const content = prompt.split("\n").slice(4, -2).join("\n");
+
+    expect(content.length).toBeLessThanOrEqual(8_000);
+    expect(content.endsWith("[truncated]")).toBe(true);
+  });
+
+  it("truncates the whole follow-up block to 30000 characters including the marker", () => {
+    const messages = Array.from({ length: 5 }, (_, index) => ({
+      ...baseMessage,
+      id: `msg-${index}`,
+      content: "x".repeat(8_000),
+    }));
+
+    const prompt = buildFollowUpPromptFromMessages(messages);
+
+    expect(prompt.length).toBeLessThanOrEqual(30_000);
+    expect(prompt.endsWith("[truncated]")).toBe(true);
+  });
+
+  it("appends follow-up messages after the original prompt delimiter", () => {
+    expect(appendFollowUpMessagesToPrompt("Original", [])).toBe("Original");
+    expect(appendFollowUpMessagesToPrompt("Original", [baseMessage])).toContain(
+      "Original\n\n---\n\nUser follow-up messages",
+    );
   });
 });
 

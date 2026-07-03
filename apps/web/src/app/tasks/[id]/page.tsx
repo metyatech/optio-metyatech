@@ -39,7 +39,7 @@ import {
 import { toast } from "sonner";
 import { useOptioChatStore } from "@/hooks/use-optio-chat";
 import { AddDependencyDialog } from "@/components/add-dependency-dialog";
-import { getTaskComposerMode } from "./composer-mode";
+import { getTaskComposerMode, getTaskMessageComposerConfig } from "./composer-mode";
 
 export default function TaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -150,52 +150,66 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
     { text: string; timestamp: string; status: "sending" | "sent" | "failed" }[]
   >([]);
 
-  const handleSendMessage = async (mode: "soft" | "interrupt" = "soft") => {
-    if (!messageInput.trim()) return;
-    const text = messageInput;
+  const sendTaskMessageWithOptimism = async (
+    text: string,
+    mode: "soft" | "interrupt" = "soft",
+    successMessage?: string,
+  ) => {
+    const messageText = text.trim();
+    if (!messageText) return false;
     setMessageSending(true);
     setUserMessages((prev) => [
       ...prev,
-      { text, timestamp: new Date().toISOString(), status: "sending" },
+      { text: messageText, timestamp: new Date().toISOString(), status: "sending" },
     ]);
     try {
-      await api.sendTaskMessage(id, text, mode);
-      setMessageInput("");
+      await api.sendTaskMessage(id, messageText, mode);
       setUserMessages((prev) =>
-        prev.map((m) => (m.text === text && m.status === "sending" ? { ...m, status: "sent" } : m)),
+        prev.map((m) =>
+          m.text === messageText && m.status === "sending" ? { ...m, status: "sent" } : m,
+        ),
       );
-      toast.success(mode === "interrupt" ? "Interrupt sent" : "Message sent");
+      toast.success(successMessage ?? (mode === "interrupt" ? "Interrupt sent" : "Message sent"));
+      await refresh();
+      return true;
     } catch (err) {
       setUserMessages((prev) =>
         prev.map((m) =>
-          m.text === text && m.status === "sending" ? { ...m, status: "failed" } : m,
+          m.text === messageText && m.status === "sending" ? { ...m, status: "failed" } : m,
         ),
       );
       toast.error(err instanceof Error ? err.message : "Failed to send message");
+      return false;
+    } finally {
+      setMessageSending(false);
     }
-    setMessageSending(false);
+  };
+
+  const handleSendMessage = async (mode: "soft" | "interrupt" = "soft") => {
+    const sent = await sendTaskMessageWithOptimism(messageInput, mode);
+    if (sent) setMessageInput("");
   };
 
   const handleResume = async () => {
     if (!resumePrompt.trim()) return;
     setActionLoading(true);
     try {
-      await api.resumeTask(id, resumePrompt);
-      setResumePrompt("");
-      await refresh();
-    } catch {}
-    setActionLoading(false);
+      const sent = await sendTaskMessageWithOptimism(resumePrompt, "soft", "Follow-up sent");
+      if (sent) setResumePrompt("");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleApprovePlan = async () => {
     setActionLoading(true);
     try {
-      await api.resumeTask(id, PLAN_APPROVE_PROMPT);
-      await refresh();
+      await sendTaskMessageWithOptimism(PLAN_APPROVE_PROMPT, "soft", "Plan approved");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to approve plan");
+    } finally {
+      setActionLoading(false);
     }
-    setActionLoading(false);
   };
 
   const handleForceRestart = async () => {
@@ -251,20 +265,15 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
   }
 
   const repoName = task.repoUrl.replace(/.*\/\/[^/]+\//, "").replace(/\.git$/, "");
-  const isActive = ["running", "provisioning", "queued"].includes(task.state);
   const isTerminal = ["completed", "failed", "cancelled"].includes(task.state);
   const canCancel = ["running", "queued", "provisioning", "needs_attention"].includes(task.state);
   const canRetry = ["failed", "cancelled"].includes(task.state);
-  const canResume = ["needs_attention", "failed"].includes(task.state) && !!task.sessionId;
-  // Chat composer shows whenever the message endpoint will accept a message:
-  // - running + claude-code (mid-turn delivery via stream-json stdin), or
-  // - stopped-but-resumable (needs_attention / pr_opened / failed / cancelled)
-  //   — the message becomes the resume prompt for any agent type.
-  const canMessageRunning = task.state === "running" && task.agentType === "claude-code";
-  const canMessageStopped = ["needs_attention", "pr_opened", "failed", "cancelled"].includes(
-    task.state,
-  );
-  const canMessage = canMessageRunning || canMessageStopped;
+  const composerConfig = getTaskMessageComposerConfig({
+    state: task.state,
+    agentType: task.agentType,
+    prState: task.prState ?? null,
+  });
+  const canMessage = composerConfig.canMessage;
   const canForceRestart = ["needs_attention", "failed", "pr_opened"].includes(task.state);
 
   // Detect plan review state: needs_attention with plan_review trigger
@@ -272,7 +281,11 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
     task.state === "needs_attention" &&
     events.length > 0 &&
     events[events.length - 1]?.trigger === "plan_review";
-  const composerMode = getTaskComposerMode({ isPlanReview, canResume, canMessage });
+  const composerMode = getTaskComposerMode({
+    isPlanReview,
+    canResume: canMessage,
+    canMessage,
+  });
 
   // (log filtering is handled by LogViewer component)
 
@@ -779,7 +792,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
             {/* Subtask list */}
             {subtasks.length > 0 && (
               <div className="space-y-1">
-                {subtasks.map((sub: any, idx: number) => {
+                {subtasks.map((sub: any) => {
                   const isStep = sub.taskType === "step";
                   const stepIndex = isStep
                     ? subtasks.filter((s: any) => s.taskType === "step").indexOf(sub) + 1
@@ -878,11 +891,12 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                     onChange={(e) => setResumePrompt(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleResume()}
                     placeholder="Send feedback or modifications to the plan..."
+                    disabled={actionLoading || messageSending}
                     className="flex-1 px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                   />
                   <button
                     onClick={handleResume}
-                    disabled={!resumePrompt.trim() || actionLoading}
+                    disabled={!resumePrompt.trim() || actionLoading || messageSending}
                     title="Send feedback to the agent"
                     className="px-3 py-2 rounded-md text-sm font-medium transition-colors bg-bg-hover text-text hover:bg-bg-hover/80 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1.5"
                   >
@@ -891,7 +905,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                   </button>
                   <button
                     onClick={handleApprovePlan}
-                    disabled={actionLoading}
+                    disabled={actionLoading || messageSending}
                     title="Approve the plan and start implementation"
                     className="px-3 py-2 rounded-md text-sm font-medium transition-colors bg-success text-white hover:bg-success/90 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1.5"
                   >
@@ -913,62 +927,20 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
                 value={messageInput}
                 onChange={setMessageInput}
                 onSend={() => handleSendMessage("soft")}
-                onInterrupt={canMessageRunning ? () => handleSendMessage("interrupt") : undefined}
-                sending={messageSending}
-                placeholder={
-                  canMessageRunning
-                    ? "Send a message to the running agent..."
-                    : "Resume the agent with a message..."
+                onInterrupt={
+                  composerConfig.canInterrupt ? () => handleSendMessage("interrupt") : undefined
                 }
-                sendLabel={canMessageRunning ? "Send" : "Resume"}
+                sending={messageSending}
+                placeholder={composerConfig.placeholder}
+                sendLabel={composerConfig.sendLabel}
                 interruptLabel="Stop"
               />
             ) : (
-              /* Resume bar (for non-running or resumable tasks) */
-              <div className="flex gap-2 items-center">
-                <input
-                  value={resumePrompt}
-                  onChange={(e) => setResumePrompt(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleResume()}
-                  placeholder={
-                    canResume
-                      ? "Send follow-up instructions to the agent..."
-                      : isActive
-                        ? "Agent is running..."
-                        : "Task has ended"
-                  }
-                  disabled={!canResume}
-                  className="flex-1 px-3 py-2 rounded-lg bg-bg border border-border text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                />
-                <button
-                  onClick={handleResume}
-                  disabled={!canResume || !resumePrompt.trim() || actionLoading}
-                  title={
-                    !task.sessionId && isTerminal
-                      ? "No session to resume — the agent didn't produce a session ID"
-                      : canResume
-                        ? "Resume the agent with these instructions"
-                        : "Task must be in a resumable state"
-                  }
-                  className={cn(
-                    "px-3 py-2 rounded-md text-sm font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed",
-                    canResume
-                      ? "bg-primary text-white hover:bg-primary-hover"
-                      : "bg-bg-hover text-text-muted",
-                  )}
-                >
-                  {actionLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                </button>
+              /* Blocked helper for completed tasks, merged/closed PRs, or unsupported states. */
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg border border-border text-sm text-text-muted">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{composerConfig.helperText}</span>
               </div>
-            )}
-            {isTerminal && !task.sessionId && !canMessage && (
-              <p className="text-[10px] text-text-muted/50 mt-1">
-                Resume unavailable — no session was captured for this task.
-              </p>
             )}
           </div>
         </div>

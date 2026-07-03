@@ -66,7 +66,7 @@ describe("state-machine", () => {
       expect(valid).toContain(TaskState.NEEDS_ATTENTION);
       expect(valid).toContain(TaskState.FAILED);
       expect(valid).toContain(TaskState.CANCELLED);
-      expect(valid).not.toContain(TaskState.QUEUED);
+      expect(valid).toContain(TaskState.QUEUED);
     });
 
     it("returns empty array for terminal state", () => {
@@ -117,8 +117,8 @@ describe("state-machine", () => {
       expect(state).toBe(TaskState.QUEUED);
     });
 
-    it("rejects direct running → queued (must go through failed)", () => {
-      expect(canTransition(TaskState.RUNNING, TaskState.QUEUED)).toBe(false);
+    it("allows direct running → queued for queued follow-up messages", () => {
+      expect(canTransition(TaskState.RUNNING, TaskState.QUEUED)).toBe(true);
     });
 
     it("allows provisioning → queued for concurrency re-queue", () => {

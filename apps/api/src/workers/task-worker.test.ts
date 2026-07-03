@@ -30,6 +30,8 @@ import {
   shouldCompleteAgentRun,
   shouldRunPlanningMode,
   shouldEscalateNoPr,
+  shouldRestartFromBranchForFollowUp,
+  buildResumeJobDataForFollowUp,
   validateCodexAuthJson,
 } from "./task-worker.js";
 import { parseCodexEvent } from "../services/codex-event-parser.js";
@@ -365,6 +367,59 @@ describe("buildInitialClaudeStreamMessage", () => {
     const line = buildInitialClaudeStreamMessage("");
     const parsed = JSON.parse(line);
     expect(parsed.message.content[0].text).toBe("");
+  });
+});
+
+describe("follow-up resume helpers", () => {
+  it("restarts from branch when a task PR URL is present", () => {
+    expect(
+      shouldRestartFromBranchForFollowUp({ prUrl: "https://github.com/org/repo/pull/12" }),
+    ).toBe(true);
+  });
+
+  it("restarts from branch when a captured PR URL is present", () => {
+    expect(
+      shouldRestartFromBranchForFollowUp({
+        capturedPrUrl: "https://github.com/org/repo/pull/12",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not restart from branch without a PR URL", () => {
+    expect(shouldRestartFromBranchForFollowUp({})).toBe(false);
+  });
+
+  it("builds follow-up resume job data with restartFromBranch only when needed", () => {
+    expect(
+      buildResumeJobDataForFollowUp({
+        taskId: "task-1",
+        resumeSessionId: "session-1",
+        resumePrompt: "follow up",
+        approvedPlanPath: ".optio/plan.md",
+        approvedPlanContent: "# Plan",
+        prUrl: "https://github.com/org/repo/pull/12",
+      }),
+    ).toEqual({
+      taskId: "task-1",
+      resumeSessionId: "session-1",
+      resumePrompt: "follow up",
+      approvedPlanPath: ".optio/plan.md",
+      approvedPlanContent: "# Plan",
+      restartFromBranch: true,
+    });
+
+    expect(
+      buildResumeJobDataForFollowUp({
+        taskId: "task-1",
+        resumePrompt: "follow up",
+      }),
+    ).toEqual({
+      taskId: "task-1",
+      resumeSessionId: undefined,
+      resumePrompt: "follow up",
+      approvedPlanPath: undefined,
+      approvedPlanContent: undefined,
+    });
   });
 });
 

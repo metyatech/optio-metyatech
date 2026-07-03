@@ -183,7 +183,7 @@ describe("POST /api/tasks/:id/message", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it("returns 409 when task is completed (terminal, not resumable)", async () => {
+  it("returns 409 before saving when task is completed", async () => {
     mockGetTask.mockResolvedValue({ ...runningClaudeTask, state: "completed" });
     mockCanMessageTask.mockResolvedValue(true);
 
@@ -194,32 +194,82 @@ describe("POST /api/tasks/:id/message", () => {
     });
 
     expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe(
+      "Completed tasks cannot be resumed with a message. Create a new task for follow-up work.",
+    );
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
-  it("returns 409 when task is pending (hasn't started, no agent to message)", async () => {
-    mockGetTask.mockResolvedValue({ ...runningClaudeTask, state: "pending" });
-    mockCanMessageTask.mockResolvedValue(true);
+  it.each(["pending", "waiting_on_deps", "queued", "provisioning"])(
+    "accepts a message for pre-run state %s without immediate delivery",
+    async (state) => {
+      mockGetTask.mockResolvedValue({ ...runningClaudeTask, state });
+      mockCanMessageTask.mockResolvedValue(true);
+      mockSendMessage.mockResolvedValue({
+        id: "msg-pre-run",
+        taskId: "task-1",
+        userId: "user-1",
+        content: "include docs",
+        mode: "soft",
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+        deliveredAt: null,
+        ackedAt: null,
+      });
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/tasks/task-1/message",
-      payload: { content: "hello" },
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/tasks/task-1/message",
+        payload: { content: "include docs" },
+      });
 
-    expect(res.statusCode).toBe(409);
-  });
+      expect(res.statusCode).toBe(202);
+      expect(res.json().message.deliveredAt).toBeNull();
+      expect(mockRecordTaskEvent).toHaveBeenCalledWith(
+        "task-1",
+        state,
+        "user_message",
+        "include docs",
+        expect.anything(),
+      );
+      expect(mockPublishTaskMessage).not.toHaveBeenCalled();
+      expect(mockQueueAdd).not.toHaveBeenCalled();
+      expect(mockMarkDelivered).not.toHaveBeenCalled();
+    },
+  );
 
-  it("returns 501 for non-claude-code agent in running state", async () => {
+  it("accepts a running non-claude-code message without live delivery or stopping the run", async () => {
     mockGetTask.mockResolvedValue({ ...runningClaudeTask, agentType: "codex" });
     mockCanMessageTask.mockResolvedValue(true);
+    mockSendMessage.mockResolvedValue({
+      id: "msg-running-non-live",
+      taskId: "task-1",
+      userId: "user-1",
+      content: "follow up after current run",
+      mode: "interrupt",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      deliveredAt: null,
+      ackedAt: null,
+    });
 
     const res = await app.inject({
       method: "POST",
       url: "/api/tasks/task-1/message",
-      payload: { content: "hello" },
+      payload: { content: "follow up after current run", mode: "interrupt" },
     });
 
-    expect(res.statusCode).toBe(501);
+    expect(res.statusCode).toBe(202);
+    expect(res.json().message.deliveredAt).toBeNull();
+    expect(res.json().message.mode).toBe("interrupt");
+    expect(mockRecordTaskEvent).toHaveBeenCalledWith(
+      "task-1",
+      "running",
+      "user_message",
+      "follow up after current run",
+      expect.anything(),
+    );
+    expect(mockPublishTaskMessage).not.toHaveBeenCalled();
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+    expect(mockMarkDelivered).not.toHaveBeenCalled();
   });
 
   it.each(["needs_attention", "failed", "pr_opened", "cancelled"])(
@@ -312,6 +362,75 @@ describe("POST /api/tasks/:id/message", () => {
 
     expect(res.statusCode).toBe(202);
     expect(mockQueueAdd).toHaveBeenCalled();
+  });
+
+  it.each(["merged", "closed"])(
+    "returns 409 before saving when stopped task PR is %s",
+    async (prState) => {
+      mockGetTask.mockResolvedValue({
+        ...runningClaudeTask,
+        state: "pr_opened",
+        prUrl: "https://github.com/org/repo/pull/123",
+        prState,
+      });
+      mockCanMessageTask.mockResolvedValue(true);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/tasks/task-1/message",
+        payload: { content: "one more change" },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe(
+        "This task's PR is merged or closed and cannot be resumed. Create a new task for follow-up work.",
+      );
+      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(mockQueueAdd).not.toHaveBeenCalled();
+    },
+  );
+
+  it("adds restartFromBranch when a stopped resume task already has a PR URL", async () => {
+    mockGetTask.mockResolvedValue({
+      ...runningClaudeTask,
+      state: "pr_opened",
+      sessionId: "prior-session-xyz",
+      prUrl: "https://github.com/org/repo/pull/123",
+      prState: "open",
+    });
+    mockCanMessageTask.mockResolvedValue(true);
+    mockSendMessage.mockResolvedValue({
+      id: "msg-restart-branch",
+      taskId: "task-1",
+      userId: "user-1",
+      content: "please update the PR branch",
+      mode: "soft",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      deliveredAt: null,
+      ackedAt: null,
+    });
+    mockTransitionTask.mockResolvedValue(undefined);
+    mockQueueAdd.mockResolvedValue({ id: "job-with-pr" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks/task-1/message",
+      payload: { content: "please update the PR branch" },
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-task",
+      expect.objectContaining({
+        taskId: "task-1",
+        resumeSessionId: "prior-session-xyz",
+        resumePrompt: "please update the PR branch",
+        restartFromBranch: true,
+      }),
+      expect.any(Object),
+    );
+    expect(mockMarkDelivered).toHaveBeenCalledWith("msg-restart-branch");
+    expect(res.json().message.deliveredAt).not.toBeNull();
   });
 
   it("keeps planning mode on plan-review feedback via chat resume", async () => {

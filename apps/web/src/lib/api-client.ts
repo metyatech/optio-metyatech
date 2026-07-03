@@ -180,7 +180,7 @@ export const api = {
 
   getTaskActivity: (id: string) => request<{ activity: any[] }>(`/api/tasks/${id}/activity`),
 
-  // Task Messages (mid-task user → agent messaging)
+  // Task Messages (canonical task follow-up conversation)
   sendTaskMessage: (id: string, content: string, mode: "soft" | "interrupt" = "soft") =>
     request<{ message: any }>(`/api/tasks/${id}/message`, {
       method: "POST",

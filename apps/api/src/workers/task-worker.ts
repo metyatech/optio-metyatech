@@ -60,6 +60,43 @@ const connectionOpts = getBullMQConnectionOptions();
 
 export const taskQueue = new Queue("tasks", { connection: connectionOpts });
 
+export function shouldRestartFromBranchForFollowUp(taskOrPr: {
+  prUrl?: string | null;
+  capturedPrUrl?: string | null;
+}): boolean {
+  return !!(taskOrPr.prUrl || taskOrPr.capturedPrUrl);
+}
+
+export function buildResumeJobDataForFollowUp(opts: {
+  taskId: string;
+  resumeSessionId?: string;
+  resumePrompt: string;
+  approvedPlanPath?: string;
+  approvedPlanContent?: string;
+  prUrl?: string | null;
+  capturedPrUrl?: string | null;
+}) {
+  return {
+    taskId: opts.taskId,
+    resumeSessionId: opts.resumeSessionId,
+    resumePrompt: opts.resumePrompt,
+    approvedPlanPath: opts.approvedPlanPath,
+    approvedPlanContent: opts.approvedPlanContent,
+    ...(shouldRestartFromBranchForFollowUp(opts) ? { restartFromBranch: true } : {}),
+  };
+}
+
+async function publishTaskMessagesDelivered(taskId: string, messageIds: string[]) {
+  for (const messageId of messageIds) {
+    await publishEvent({
+      type: "task:message_delivered",
+      taskId,
+      messageId,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 function codexChatGptHome(taskId: string): string {
   return `/workspace/tasks/${taskId}/.codex`;
 }
@@ -897,6 +934,17 @@ export function startTaskWorker() {
         // exists as a tasks.taskType — external PR reviews run under
         // pr_review_runs via pr-review-worker.ts.
         const isReviewTask = !!reviewOverride || task.taskType === "review";
+        const queuedMessages = await messageService.listUndeliveredMessages(taskId);
+        if (queuedMessages.length > 0) {
+          allEnv.OPTIO_PROMPT = messageService.appendFollowUpMessagesToPrompt(
+            allEnv.OPTIO_PROMPT ?? "",
+            queuedMessages,
+          );
+          const messageIds = queuedMessages.map((message) => message.id);
+          await messageService.markMessagesDelivered(messageIds);
+          await publishTaskMessagesDelivered(taskId, messageIds);
+        }
+
         const agentCommand = buildAgentCommand(task.agentType, allEnv, {
           resumeSessionId,
           resumePrompt,
@@ -1242,6 +1290,41 @@ export function startTaskWorker() {
           }
         }
         const detectedPrUrl = capturedPrUrl || taskAfterExec?.prUrl || fallbackPrUrl;
+
+        const followUpMessages = await messageService.listUndeliveredMessages(taskId);
+        if (followUpMessages.length > 0) {
+          const followUpPrompt = messageService.buildFollowUpPromptFromMessages(followUpMessages);
+          const followUpSessionId =
+            sessionId ?? taskAfterExec.sessionId ?? task.sessionId ?? undefined;
+          const followUpPrUrl =
+            detectedPrUrl ?? capturedPrUrl ?? taskAfterExec.prUrl ?? task.prUrl ?? undefined;
+
+          await taskService.transitionTask(
+            taskId,
+            TaskState.QUEUED,
+            "queued_follow_up_messages",
+            followUpPrompt.slice(0, 200),
+          );
+          await taskQueue.add(
+            "process-task",
+            buildResumeJobDataForFollowUp({
+              taskId,
+              resumeSessionId: followUpSessionId,
+              resumePrompt: followUpPrompt,
+              prUrl: followUpPrUrl,
+              capturedPrUrl,
+            }),
+            {
+              jobId: `${taskId}-followup-${Date.now()}`,
+              attempts: 1,
+            },
+          );
+          const messageIds = followUpMessages.map((message) => message.id);
+          await messageService.markMessagesDelivered(messageIds);
+          await publishTaskMessagesDelivered(taskId, messageIds);
+          log.info({ messageCount: followUpMessages.length }, "Queued task follow-up messages");
+          return;
+        }
 
         if (
           !hasAgentStartupEvidence({
