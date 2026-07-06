@@ -13,7 +13,7 @@ import { parseOpenCodeEvent } from "../services/opencode-event-parser.js";
 import { parseGeminiEvent } from "../services/gemini-event-parser.js";
 import { db } from "../db/client.js";
 import { workflowRuns } from "../db/schema.js";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import * as workflowService from "../services/workflow-service.js";
 import * as workflowPool from "../services/workflow-pool-service.js";
 import { publishWorkflowRunEvent } from "../services/event-bus.js";
@@ -158,14 +158,23 @@ async function transitionRun(
     return false;
   }
 
-  await db
+  const updated = await db
     .update(workflowRuns)
     .set({
       state: newState,
       updatedAt: new Date(),
       ...fields,
     })
-    .where(eq(workflowRuns.id, runId));
+    .where(and(eq(workflowRuns.id, runId), eq(workflowRuns.state, currentState)))
+    .returning({ id: workflowRuns.id });
+
+  if (updated.length === 0) {
+    logger.info(
+      { runId, from: currentState, to: newState },
+      "Workflow run state changed before transition",
+    );
+    return false;
+  }
 
   await publishWorkflowRunEvent({
     type: "workflow_run:state_changed",
@@ -335,7 +344,15 @@ export function startWorkflowWorker() {
         });
 
         if (!claimed) {
-          // Re-queue with delay
+          const freshRun = await workflowService.getWorkflowRun(workflowRunId);
+          if (freshRun?.state !== WorkflowRunState.QUEUED) {
+            log.info(
+              { state: freshRun?.state ?? null },
+              "Skipping delayed workflow requeue because run is no longer queued",
+            );
+            return;
+          }
+
           const jitter = Math.floor(Math.random() * 5000);
           await workflowRunQueue.add("process-workflow-run", job.data, {
             jobId: `${workflowRunId}-delayed-${Date.now()}`,

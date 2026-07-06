@@ -24,9 +24,16 @@ vi.mock("../db/schema.js", () => ({
     id: "id",
     state: "state",
     createdAt: "createdAt",
+    updatedAt: "updatedAt",
     taskId: "taskId",
     activitySubstate: "activitySubstate",
     repoUrl: "repoUrl",
+    title: "title",
+    prompt: "prompt",
+    agentType: "agentType",
+    taskType: "taskType",
+    createdBy: "createdBy",
+    costUsd: "costUsd",
   },
   taskEvents: { taskId: "taskId", createdAt: "createdAt", userId: "userId" },
   taskLogs: { taskId: "taskId", timestamp: "timestamp", logType: "logType", content: "content" },
@@ -42,6 +49,9 @@ vi.mock("../db/schema.js", () => ({
 }));
 
 vi.mock("./event-bus.js", () => ({ publishEvent: vi.fn() }));
+vi.mock("../workers/webhook-worker.js", () => ({
+  enqueueWebhookEvent: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -58,6 +68,23 @@ import {
   updateTaskActivity,
   getStallThresholdForRepo,
 } from "./task-service.js";
+
+function flattenSql(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(flattenSql).join(" ");
+  if (typeof value === "object") {
+    const candidate = value as { queryChunks?: unknown[]; value?: unknown; chunks?: unknown[] };
+    if (Array.isArray(candidate.queryChunks)) return flattenSql(candidate.queryChunks);
+    if (Array.isArray(candidate.chunks)) return flattenSql(candidate.chunks);
+    if ("value" in candidate) return flattenSql(candidate.value);
+    return Object.values(candidate).map(flattenSql).join(" ");
+  }
+  return String(value);
+}
 
 describe("StateRaceError", () => {
   it("has correct name", () => {
@@ -281,6 +308,43 @@ describe("searchTasks", () => {
     await searchTasks({});
     // limit(51) = default 50 + 1
     expect(mockDb.limit).toHaveBeenCalledWith(51);
+  });
+
+  it("applies createdAfter to createdAt", async () => {
+    const mockDb = db as any;
+    mockDb.where.mockResolvedValueOnce([]);
+
+    await searchTasks({ createdAfter: "2026-01-01T00:00:00Z" });
+
+    const whereSql = flattenSql(mockDb.where.mock.calls.at(-1)?.[0]);
+    expect(whereSql).toContain("createdAt");
+    expect(whereSql).not.toContain("updatedAt");
+  });
+
+  it("applies updatedAfter to updatedAt", async () => {
+    const mockDb = db as any;
+    mockDb.where.mockResolvedValueOnce([]);
+
+    await searchTasks({ updatedAfter: "2026-01-02T00:00:00Z" });
+
+    const whereSql = flattenSql(mockDb.where.mock.calls.at(-1)?.[0]);
+    expect(whereSql).toContain("updatedAt");
+    expect(whereSql).not.toContain("createdAt");
+  });
+
+  it("combines createdAfter and updatedAfter filters with AND", async () => {
+    const mockDb = db as any;
+    mockDb.where.mockResolvedValueOnce([]);
+
+    await searchTasks({
+      createdAfter: "2026-01-01T00:00:00Z",
+      updatedAfter: "2026-01-02T00:00:00Z",
+    });
+
+    const whereSql = flattenSql(mockDb.where.mock.calls.at(-1)?.[0]).toLowerCase();
+    expect(whereSql).toContain("createdat");
+    expect(whereSql).toContain("updatedat");
+    expect(whereSql).toContain("and");
   });
 });
 

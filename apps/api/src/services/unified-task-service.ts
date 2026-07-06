@@ -39,6 +39,31 @@ export interface ResolvedTask {
   data: Record<string, unknown>;
 }
 
+export function getCreatedAtMs(task: ResolvedTask): number {
+  const createdAt = task.data.createdAt;
+  if (createdAt instanceof Date) return createdAt.getTime();
+  if (typeof createdAt === "string" || typeof createdAt === "number") {
+    const ms = new Date(createdAt).getTime();
+    return Number.isNaN(ms) ? 0 : ms;
+  }
+  return 0;
+}
+
+export function pageResolvedTasks(
+  tasksToPage: ResolvedTask[],
+  offset: number,
+  limit: number,
+): ResolvedTask[] {
+  return tasksToPage
+    .slice()
+    .sort((a, b) => {
+      const createdDiff = getCreatedAtMs(b) - getCreatedAtMs(a);
+      if (createdDiff !== 0) return createdDiff;
+      return String(b.data.id ?? "").localeCompare(String(a.data.id ?? ""));
+    })
+    .slice(offset, offset + limit);
+}
+
 /**
  * Resolve an id across all three backing tables, in order of likelihood:
  * tasks (most common — ad-hoc runs) → task_configs → workflows. Returns null
@@ -87,13 +112,16 @@ export async function listUnifiedTasks(opts: {
   type?: UnifiedTaskType;
   workspaceId?: string | null;
   limit?: number;
+  offset?: number;
 }): Promise<Array<ResolvedTask>> {
   const wsId = opts.workspaceId ?? null;
   const limit = opts.limit ?? 50;
+  const offset = opts.offset ?? 0;
+  const fetchLimit = limit + offset;
   const collected: ResolvedTask[] = [];
 
   if (!opts.type || opts.type === "repo-task") {
-    const rows = await taskService.listTasks({ workspaceId: wsId, limit });
+    const rows = await taskService.listTasks({ workspaceId: wsId, limit: fetchLimit });
     for (const r of rows) {
       collected.push({ type: "repo-task", data: r as unknown as Record<string, unknown> });
     }
@@ -101,14 +129,14 @@ export async function listUnifiedTasks(opts: {
 
   if (!opts.type || opts.type === "repo-blueprint") {
     const rows = await taskConfigService.listTaskConfigs({ workspaceId: wsId });
-    for (const r of rows.slice(0, limit)) {
+    for (const r of rows.slice(0, fetchLimit)) {
       collected.push({ type: "repo-blueprint", data: r as unknown as Record<string, unknown> });
     }
   }
 
   if (!opts.type || opts.type === "standalone") {
     const rows = await workflowService.listWorkflows(wsId ?? undefined);
-    for (const r of rows.slice(0, limit)) {
+    for (const r of rows.slice(0, fetchLimit)) {
       collected.push({ type: "standalone", data: r as unknown as Record<string, unknown> });
     }
   }
@@ -119,14 +147,14 @@ export async function listUnifiedTasks(opts: {
       .select()
       .from(prReviews)
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(desc(prReviews.updatedAt))
-      .limit(limit);
+      .orderBy(desc(prReviews.createdAt))
+      .limit(fetchLimit);
     for (const r of rows) {
       collected.push({ type: "pr-review", data: r as unknown as Record<string, unknown> });
     }
   }
 
-  return collected;
+  return pageResolvedTasks(collected, offset, limit);
 }
 
 /**

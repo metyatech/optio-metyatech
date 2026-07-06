@@ -30,8 +30,11 @@ vi.mock("../services/task-service.js", () => ({
 }));
 
 const mockAddDependencies = vi.fn();
+const mockValidateDependenciesForNewTask = vi.fn(async (ids: string[]) => ids);
 vi.mock("../services/dependency-service.js", () => ({
   addDependencies: (...args: unknown[]) => mockAddDependencies(...args),
+  validateDependenciesForNewTask: (...args: [string[]]) =>
+    mockValidateDependenciesForNewTask(...args),
   computePendingReason: vi.fn().mockResolvedValue(null),
 }));
 
@@ -51,12 +54,16 @@ vi.mock("../workers/task-worker.js", () => ({
 }));
 
 const mockDbUpdate = vi.fn();
+const mockDbSet = vi.fn();
 vi.mock("../db/client.js", () => ({
   db: {
     update: () => ({
-      set: () => ({
-        where: (...args: unknown[]) => mockDbUpdate(...args),
-      }),
+      set: (values: Record<string, unknown>) => {
+        mockDbSet(values);
+        return {
+          where: (...args: unknown[]) => mockDbUpdate(...args),
+        };
+      },
     }),
   },
 }));
@@ -73,9 +80,10 @@ vi.mock("../services/review-service.js", () => ({
 // tasks table lookup returns null. Stub to null so existing repo-task tests
 // continue to see 404s.
 const mockResolveAnyTaskById = vi.fn().mockResolvedValue(null);
+const mockListUnifiedTasks = vi.fn().mockResolvedValue([]);
 vi.mock("../services/unified-task-service.js", () => ({
   resolveAnyTaskById: (...args: unknown[]) => mockResolveAnyTaskById(...args),
-  listUnifiedTasks: vi.fn().mockResolvedValue([]),
+  listUnifiedTasks: (...args: unknown[]) => mockListUnifiedTasks(...args),
   listUnifiedRuns: vi.fn().mockResolvedValue([]),
   getUnifiedRun: vi.fn().mockResolvedValue(null),
   listTriggersForParent: vi.fn().mockResolvedValue([]),
@@ -176,6 +184,7 @@ describe("GET /api/tasks", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockValidateDependenciesForNewTask.mockImplementation(async (ids: string[]) => ids);
     app = await buildTestApp();
   });
 
@@ -213,6 +222,22 @@ describe("GET /api/tasks", () => {
       workspaceId: "ws-1",
     });
   });
+
+  it("passes offset through unified task listing", async () => {
+    mockListUnifiedTasks.mockResolvedValue([
+      { type: "pr-review", data: { id: "review-1", createdAt: new Date() } },
+    ]);
+
+    const res = await app.inject({ method: "GET", url: "/api/tasks?type=all&limit=5&offset=10" });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockListUnifiedTasks).toHaveBeenCalledWith({
+      type: undefined,
+      workspaceId: "ws-1",
+      limit: 5,
+      offset: 10,
+    });
+  });
 });
 
 describe("GET /api/tasks/search", () => {
@@ -220,6 +245,7 @@ describe("GET /api/tasks/search", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockValidateDependenciesForNewTask.mockImplementation(async (ids: string[]) => ids);
     app = await buildTestApp();
   });
 
@@ -228,12 +254,17 @@ describe("GET /api/tasks/search", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/tasks/search?q=bug&state=failed",
+      url: "/api/tasks/search?q=bug&state=failed&updatedAfter=2026-01-01T00%3A00%3A00Z",
     });
 
     expect(res.statusCode).toBe(200);
     expect(mockSearchTasks).toHaveBeenCalledWith(
-      expect.objectContaining({ q: "bug", state: "failed", workspaceId: "ws-1" }),
+      expect.objectContaining({
+        q: "bug",
+        state: "failed",
+        updatedAfter: "2026-01-01T00:00:00Z",
+        workspaceId: "ws-1",
+      }),
     );
   });
 });
@@ -278,6 +309,7 @@ describe("POST /api/tasks", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockValidateDependenciesForNewTask.mockImplementation(async (ids: string[]) => ids);
     app = await buildTestApp();
   });
 
@@ -315,6 +347,7 @@ describe("POST /api/tasks", () => {
   it("creates a task with dependencies", async () => {
     mockCreateTask.mockResolvedValue({ ...mockTaskData, id: "new-task" });
     mockTransitionTask.mockResolvedValue(undefined);
+    mockValidateDependenciesForNewTask.mockResolvedValue(["00000000-0000-0000-0000-000000000001"]);
     mockAddDependencies.mockResolvedValue(undefined);
 
     const res = await app.inject({
@@ -330,6 +363,9 @@ describe("POST /api/tasks", () => {
     });
 
     expect(res.statusCode).toBe(201);
+    expect(mockValidateDependenciesForNewTask).toHaveBeenCalledWith([
+      "00000000-0000-0000-0000-000000000001",
+    ]);
     expect(mockAddDependencies).toHaveBeenCalledWith("new-task", [
       "00000000-0000-0000-0000-000000000001",
     ]);
@@ -343,6 +379,29 @@ describe("POST /api/tasks", () => {
     );
     // Should NOT enqueue when dependencies exist
     expect(mockQueueAdd).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when dependency validation fails before task creation", async () => {
+    mockValidateDependenciesForNewTask.mockRejectedValue(
+      new Error("Dependency tasks not found: dep-1"),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      payload: {
+        title: "Fix bug",
+        prompt: "Fix the bug",
+        repoUrl: "https://github.com/org/repo",
+        agentType: "claude-code",
+        dependsOn: ["00000000-0000-0000-0000-000000000001"],
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "Dependency tasks not found: dep-1" });
+    expect(mockCreateTask).not.toHaveBeenCalled();
+    expect(mockAddDependencies).not.toHaveBeenCalled();
   });
 
   it("rejects invalid agentType (400 from Zod body schema)", async () => {
@@ -672,6 +731,7 @@ describe("POST /api/tasks/reorder", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockDbUpdate.mockResolvedValue(undefined);
+    mockGetTask.mockResolvedValue({ ...mockTaskData, state: "queued" });
     app = await buildTestApp();
   });
 
@@ -695,6 +755,50 @@ describe("POST /api/tasks/reorder", () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("Validation error");
+  });
+
+  it("refreshes queued task jobs with the new priority", async () => {
+    const removeMatching = vi.fn().mockResolvedValue(undefined);
+    const removeOther = vi.fn().mockResolvedValue(undefined);
+    mockQueueGetJobs.mockResolvedValue([
+      { data: { taskId: "task-a" }, remove: removeMatching },
+      { data: { taskId: "task-other" }, remove: removeOther },
+    ]);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks/reorder",
+      payload: { taskIds: ["task-a"] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockDbSet).toHaveBeenCalledWith(expect.objectContaining({ priority: 1 }));
+    expect(mockQueueGetJobs).toHaveBeenCalledWith(["waiting", "prioritized", "delayed"]);
+    expect(removeMatching).toHaveBeenCalled();
+    expect(removeOther).not.toHaveBeenCalled();
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-task",
+      { taskId: "task-a" },
+      expect.objectContaining({
+        jobId: expect.stringMatching(/^task-a-reorder-\d+-\d+$/),
+        priority: 1,
+      }),
+    );
+  });
+
+  it("does not readd jobs for running tasks", async () => {
+    mockGetTask.mockResolvedValue({ ...mockTaskData, state: "running" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks/reorder",
+      payload: { taskIds: ["task-a"] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockDbSet).toHaveBeenCalledWith(expect.objectContaining({ priority: 1 }));
+    expect(mockQueueGetJobs).not.toHaveBeenCalled();
+    expect(mockQueueAdd).not.toHaveBeenCalled();
   });
 });
 

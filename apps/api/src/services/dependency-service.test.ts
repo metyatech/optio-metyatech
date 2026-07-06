@@ -73,6 +73,7 @@ import {
   cascadeFailure,
   removeDependency,
   computePendingReason,
+  validateDependenciesForNewTask,
 } from "./dependency-service.js";
 
 describe("dependency-service", () => {
@@ -147,6 +148,40 @@ describe("dependency-service", () => {
       await addDependencies("task-1", ["task-2", "task-3"]);
 
       expect(db.insert).toHaveBeenCalled();
+    });
+  });
+
+  describe("validateDependenciesForNewTask", () => {
+    it("throws when dependency IDs are duplicated", async () => {
+      await expect(validateDependenciesForNewTask(["task-1", "task-2", "task-1"])).rejects.toThrow(
+        "Duplicate dependency task IDs: task-1",
+      );
+      expect(db.select).not.toHaveBeenCalled();
+    });
+
+    it("throws when dependency tasks are missing", async () => {
+      (db.select as any) = vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ id: "task-1" }]),
+        }),
+      });
+
+      await expect(validateDependenciesForNewTask(["task-1", "task-missing"])).rejects.toThrow(
+        "Dependency tasks not found: task-missing",
+      );
+    });
+
+    it("returns the unique dependency ID list when all dependencies exist", async () => {
+      (db.select as any) = vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ id: "task-1" }, { id: "task-2" }]),
+        }),
+      });
+
+      await expect(validateDependenciesForNewTask(["task-1", "task-2"])).resolves.toEqual([
+        "task-1",
+        "task-2",
+      ]);
     });
   });
 
@@ -380,9 +415,7 @@ describe("dependency-service", () => {
     it("returns null when task not found", async () => {
       (db.select as any) = vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            then: vi.fn().mockImplementation((cb: any) => cb([])),
-          }),
+          where: vi.fn().mockResolvedValue([]),
         }),
       });
 
@@ -398,11 +431,7 @@ describe("dependency-service", () => {
             selectCallCount++;
             if (selectCallCount === 1) {
               // Task lookup
-              return {
-                then: vi
-                  .fn()
-                  .mockImplementation((cb: any) => cb([{ id: "t-1", state: "waiting_on_deps" }])),
-              };
+              return Promise.resolve([{ id: "t-1", state: "waiting_on_deps" }]);
             }
             // getDependencies (innerJoin path)
             return Promise.resolve([{ id: "d-1", title: "Build", state: "running" }]);

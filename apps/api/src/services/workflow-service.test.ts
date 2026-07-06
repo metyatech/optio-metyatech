@@ -54,11 +54,18 @@ vi.mock("../logger.js", () => ({
   },
 }));
 
-const { mockPublishWorkflowRunEvent } = vi.hoisted(() => ({
+const { mockPublishWorkflowRunEvent, mockWorkflowRunQueueAdd } = vi.hoisted(() => ({
   mockPublishWorkflowRunEvent: vi.fn().mockResolvedValue(undefined),
+  mockWorkflowRunQueueAdd: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./event-bus.js", () => ({
   publishWorkflowRunEvent: mockPublishWorkflowRunEvent,
+}));
+
+vi.mock("../workers/workflow-worker.js", () => ({
+  workflowRunQueue: {
+    add: mockWorkflowRunQueueAdd,
+  },
 }));
 
 import { db } from "../db/client.js";
@@ -756,21 +763,53 @@ describe("workflow-service", () => {
     it("retries a failed workflow run", async () => {
       (db.select as any) = vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ id: "wr-1", state: "failed", retryCount: 0 }]),
+          where: vi.fn().mockResolvedValue([
+            {
+              id: "wr-1",
+              state: "failed",
+              retryCount: 0,
+              errorMessage: "boom",
+              startedAt: new Date("2026-01-01T00:00:00Z"),
+              finishedAt: new Date("2026-01-01T00:01:00Z"),
+              podId: "pod-1",
+              reconcileBackoffUntil: new Date("2026-01-01T00:02:00Z"),
+            },
+          ]),
         }),
       });
 
       const updated = { id: "wr-1", state: "queued", retryCount: 1 };
+      let capturedSet: Record<string, unknown> | undefined;
       (db.update as any) = vi.fn().mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([updated]),
-          }),
+        set: vi.fn().mockImplementation((values: Record<string, unknown>) => {
+          capturedSet = values;
+          return {
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([updated]),
+            }),
+          };
         }),
       });
 
       const result = await retryWorkflowRun("wr-1");
       expect(result).toEqual(updated);
+      expect(capturedSet).toEqual(
+        expect.objectContaining({
+          state: "queued",
+          retryCount: 1,
+          errorMessage: null,
+          startedAt: null,
+          finishedAt: null,
+          podId: null,
+          reconcileBackoffUntil: null,
+          reconcileAttempts: 0,
+        }),
+      );
+      expect(mockWorkflowRunQueueAdd).toHaveBeenCalledWith(
+        "process-workflow-run",
+        { workflowRunId: "wr-1" },
+        { jobId: expect.stringMatching(/^wr-1-retry-\d+$/) },
+      );
     });
 
     it("throws when run is not found", async () => {

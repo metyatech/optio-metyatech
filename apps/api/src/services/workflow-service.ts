@@ -368,6 +368,11 @@ export async function getWorkflowRun(id: string) {
   return run ?? null;
 }
 
+async function enqueueWorkflowRun(workflowRunId: string, jobId = workflowRunId): Promise<void> {
+  const { workflowRunQueue } = await import("../workers/workflow-worker.js");
+  await workflowRunQueue.add("process-workflow-run", { workflowRunId }, { jobId });
+}
+
 export async function createWorkflowRun(
   workflowId: string,
   opts?: { params?: Record<string, unknown>; triggerId?: string },
@@ -388,18 +393,9 @@ export async function createWorkflowRun(
 
   logger.info({ workflowRunId: run.id, workflowId }, "Workflow run created");
 
-  // Enqueue for the workflow-worker to pick up. Dynamic import avoids a cycle
-  // between services/workflow-service and workers/workflow-worker. This is
-  // the ONE place every run-creation path hits — keeping the enqueue here
-  // means trigger firings, webhook ingress, and the unified /api/tasks
-  // endpoints all get processed without each caller remembering to enqueue.
-  import("../workers/workflow-worker.js")
-    .then(({ workflowRunQueue }) =>
-      workflowRunQueue.add("process-workflow-run", { workflowRunId: run.id }, { jobId: run.id }),
-    )
-    .catch((err) =>
-      logger.error({ err, runId: run.id }, "Failed to enqueue workflow run for processing"),
-    );
+  enqueueWorkflowRun(run.id).catch((err) =>
+    logger.error({ err, runId: run.id }, "Failed to enqueue workflow run for processing"),
+  );
 
   // Fire outbound webhook (fire-and-forget). Dynamic import to avoid a cycle
   // with workers/webhook-worker -> services/workflow-service.
@@ -443,11 +439,19 @@ export async function retryWorkflowRun(id: string) {
       state: WorkflowRunState.QUEUED,
       retryCount: (run.retryCount ?? 0) + 1,
       errorMessage: null,
+      startedAt: null,
       finishedAt: null,
+      podId: null,
+      reconcileBackoffUntil: null,
+      reconcileAttempts: 0,
       updatedAt: new Date(),
     })
     .where(eq(workflowRuns.id, id))
     .returning();
+
+  if (updated) {
+    await enqueueWorkflowRun(id, `${id}-retry-${Date.now()}`);
+  }
 
   logger.info({ workflowRunId: id }, "Workflow run retried");
   return updated;

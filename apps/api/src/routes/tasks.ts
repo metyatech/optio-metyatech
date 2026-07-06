@@ -29,7 +29,7 @@ import {
 
 // ─── Request schemas ───
 
-const TaskKindEnum = z.enum(["repo-task", "repo-blueprint", "standalone", "all"]);
+const TaskKindEnum = z.enum(["repo-task", "repo-blueprint", "standalone", "pr-review", "all"]);
 
 const listQuerySchema = z
   .object({
@@ -37,7 +37,7 @@ const listQuerySchema = z
     limit: z.coerce.number().int().min(1).max(1000).default(50).describe("Page size (1–1000)"),
     offset: z.coerce.number().int().min(0).default(0).describe("Offset from start"),
     type: TaskKindEnum.optional().describe(
-      "Filter by task kind: repo-task (ad-hoc Repo Tasks, default), repo-blueprint (scheduled Repo Task configs), standalone (Standalone Tasks), all (union of all three)",
+      "Filter by task kind: repo-task (ad-hoc Repo Tasks, default), repo-blueprint (scheduled Repo Task configs), standalone (Standalone Tasks), pr-review (external PR reviews), all (union of all kinds)",
     ),
   })
   .describe("Task list query parameters");
@@ -53,6 +53,8 @@ const searchQuerySchema = z
     costMax: z.string().optional().describe("Maximum cost (decimal string)"),
     createdAfter: z.string().optional().describe("ISO-8601 lower bound on createdAt"),
     createdBefore: z.string().optional().describe("ISO-8601 upper bound on createdAt"),
+    updatedAfter: z.string().optional().describe("ISO-8601 lower bound on updatedAt"),
+    updatedBefore: z.string().optional().describe("ISO-8601 upper bound on updatedAt"),
     author: z.string().optional().describe("Filter by createdBy user ID"),
     cursor: z.string().optional().describe("Opaque cursor from a previous page"),
     limit: z.coerce.number().int().min(1).max(1000).optional().describe("Page size"),
@@ -214,6 +216,24 @@ const ReorderResponseSchema = z
   })
   .describe("Result of reordering a batch of tasks");
 
+async function refreshQueuedTaskJobPriority(taskId: string, priority: number): Promise<void> {
+  const existingJobs = await taskQueue.getJobs(["waiting", "prioritized", "delayed"]);
+  for (const job of existingJobs) {
+    if (job.data?.taskId === taskId) {
+      await job.remove().catch(() => {});
+    }
+  }
+
+  await taskQueue.add(
+    "process-task",
+    { taskId },
+    {
+      jobId: `${taskId}-reorder-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      priority,
+    },
+  );
+}
+
 // ─── Routes ───
 
 export async function taskRoutes(rawApp: FastifyInstance) {
@@ -268,6 +288,7 @@ export async function taskRoutes(rawApp: FastifyInstance) {
         type: type === "all" ? undefined : type,
         workspaceId,
         limit,
+        offset,
       });
       const tasksOut = resolved.map((r) => ({ type: r.type, ...r.data }));
       return reply.send({ tasks: tasksOut, limit, offset });
@@ -328,6 +349,8 @@ export async function taskRoutes(rawApp: FastifyInstance) {
         costMax: query.costMax,
         createdAfter: query.createdAfter,
         createdBefore: query.createdBefore,
+        updatedAfter: query.updatedAfter,
+        updatedBefore: query.updatedBefore,
         author: query.author,
         cursor: query.cursor,
         limit: query.limit,
@@ -528,6 +551,16 @@ export async function taskRoutes(rawApp: FastifyInstance) {
         return reply.status(400).send({ error: "repo-task requires `title`" });
       }
       const { dependsOn, type: _t, name: _n, description: _d, enabled: _e, ...taskInput } = input;
+      let dependencyIds: string[] = [];
+      if (dependsOn && dependsOn.length > 0) {
+        try {
+          dependencyIds = await dependencyService.validateDependenciesForNewTask(dependsOn);
+        } catch (err) {
+          return reply
+            .status(400)
+            .send({ error: err instanceof Error ? err.message : String(err) });
+        }
+      }
 
       const primaryRepoUrl = reposArray[0].repoUrl;
       const primaryRepoBranch = reposArray[0].repoBranch ?? "main";
@@ -569,10 +602,10 @@ export async function taskRoutes(rawApp: FastifyInstance) {
         success: true,
       }).catch(() => {});
 
-      const hasDeps = dependsOn && dependsOn.length > 0;
+      const hasDeps = dependencyIds.length > 0;
       if (hasDeps) {
         try {
-          await dependencyService.addDependencies(task.id, dependsOn);
+          await dependencyService.addDependencies(task.id, dependencyIds);
         } catch (err) {
           reply.status(400).send({ error: err instanceof Error ? err.message : String(err) });
           return;
@@ -1119,10 +1152,13 @@ export async function taskRoutes(rawApp: FastifyInstance) {
         }
       }
       for (let i = 0; i < body.taskIds.length; i++) {
-        await db
-          .update(tasks)
-          .set({ priority: i + 1, updatedAt: new Date() })
-          .where(eq(tasks.id, body.taskIds[i]));
+        const taskId = body.taskIds[i];
+        const priority = i + 1;
+        await db.update(tasks).set({ priority, updatedAt: new Date() }).where(eq(tasks.id, taskId));
+        const task = await taskService.getTask(taskId);
+        if (task?.state === "queued") {
+          await refreshQueuedTaskJobPriority(taskId, priority);
+        }
       }
       logAction({
         userId: req.user?.id,

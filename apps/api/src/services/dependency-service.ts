@@ -51,6 +51,38 @@ export async function addDependencies(taskId: string, dependsOnIds: string[]): P
   );
 }
 
+export async function validateDependenciesForNewTask(dependsOnIds: string[]): Promise<string[]> {
+  if (dependsOnIds.length === 0) return [];
+
+  const uniqueIds: string[] = [];
+  const seen = new Set<string>();
+  const duplicateIds = new Set<string>();
+  for (const id of dependsOnIds) {
+    if (seen.has(id)) {
+      duplicateIds.add(id);
+      continue;
+    }
+    seen.add(id);
+    uniqueIds.push(id);
+  }
+
+  if (duplicateIds.size > 0) {
+    throw new Error(`Duplicate dependency task IDs: ${Array.from(duplicateIds).join(", ")}`);
+  }
+
+  const depTasks = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(inArray(tasks.id, uniqueIds));
+  const foundIds = new Set(depTasks.map((t) => t.id));
+  const missing = uniqueIds.filter((id) => !foundIds.has(id));
+  if (missing.length > 0) {
+    throw new Error(`Dependency tasks not found: ${missing.join(", ")}`);
+  }
+
+  return uniqueIds;
+}
+
 /**
  * Get all tasks that taskId depends on.
  */
