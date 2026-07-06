@@ -446,12 +446,14 @@ export async function retryWorkflowRun(id: string) {
       reconcileAttempts: 0,
       updatedAt: new Date(),
     })
-    .where(eq(workflowRuns.id, id))
+    .where(and(eq(workflowRuns.id, id), eq(workflowRuns.state, currentState)))
     .returning();
 
-  if (updated) {
-    await enqueueWorkflowRun(id, `${id}-retry-${Date.now()}`);
+  if (!updated) {
+    throw new Error(`Workflow run state changed before retry: ${id}`);
   }
+
+  await enqueueWorkflowRun(id, `${id}-retry-${Date.now()}`);
 
   logger.info({ workflowRunId: id }, "Workflow run retried");
   return updated;

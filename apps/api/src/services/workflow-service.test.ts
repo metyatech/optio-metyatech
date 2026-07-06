@@ -841,6 +841,33 @@ describe("workflow-service", () => {
 
       await expect(retryWorkflowRun("wr-1")).rejects.toThrow(/Cannot retry/);
     });
+
+    it("does not enqueue when retry update loses the state race", async () => {
+      (db.select as any) = vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ id: "wr-1", state: "failed", retryCount: 0 }]),
+        }),
+      });
+
+      let capturedWhere: any;
+      (db.update as any) = vi.fn().mockReturnValue({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation((cond: any) => {
+            capturedWhere = cond;
+            return {
+              returning: vi.fn().mockResolvedValue([]),
+            };
+          }),
+        }),
+      });
+
+      await expect(retryWorkflowRun("wr-1")).rejects.toThrow(
+        "Workflow run state changed before retry: wr-1",
+      );
+      expect(mockWorkflowRunQueueAdd).not.toHaveBeenCalled();
+      // Verify where was called (practical assertion)
+      expect(capturedWhere).toBeDefined();
+    });
   });
 
   describe("cancelWorkflowRun", () => {
